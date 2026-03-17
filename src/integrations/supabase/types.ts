@@ -14,7 +14,146 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      configuracion: {
+        Row: {
+          created_at: string | null
+          iva_porcentaje: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          iva_porcentaje?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          iva_porcentaje?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      descuentos: {
+        Row: {
+          created_at: string | null
+          id: number
+          nombre: string
+          porcentaje: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: number
+          nombre: string
+          porcentaje: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: number
+          nombre?: string
+          porcentaje?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      repostaje_descuentos: {
+        Row: {
+          descuento_id: number
+          repostaje_id: number
+        }
+        Insert: {
+          descuento_id: number
+          repostaje_id: number
+        }
+        Update: {
+          descuento_id?: number
+          repostaje_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "repostaje_descuentos_descuento_id_fkey"
+            columns: ["descuento_id"]
+            isOneToOne: false
+            referencedRelation: "descuentos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "repostaje_descuentos_repostaje_id_fkey"
+            columns: ["repostaje_id"]
+            isOneToOne: false
+            referencedRelation: "repostajes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      repostajes: {
+        Row: {
+          coste_litro: number
+          created_at: string | null
+          fecha: string
+          id: number
+          km_fin: number
+          km_inicio: number
+          litros: number
+          user_id: string
+          vehiculo_id: number
+        }
+        Insert: {
+          coste_litro: number
+          created_at?: string | null
+          fecha: string
+          id?: number
+          km_fin: number
+          km_inicio: number
+          litros: number
+          user_id: string
+          vehiculo_id: number
+        }
+        Update: {
+          coste_litro?: number
+          created_at?: string | null
+          fecha?: string
+          id?: number
+          km_fin?: number
+          km_inicio?: number
+          litros?: number
+          user_id?: string
+          vehiculo_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "repostajes_vehiculo_id_fkey"
+            columns: ["vehiculo_id"]
+            isOneToOne: false
+            referencedRelation: "vehiculos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vehiculos: {
+        Row: {
+          created_at: string | null
+          id: number
+          matricula: string
+          modelo: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: number
+          matricula: string
+          modelo: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: number
+          matricula?: string
+          modelo?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
