@@ -157,6 +157,22 @@ function EditableCell({
             e.preventDefault();
             setEditing(true);
           }
+          if (e.key === "ArrowRight") {
+            e.preventDefault();
+            navigateCell(cellKey, "next");
+          }
+          if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            navigateCell(cellKey, "prev");
+          }
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            navigateCell(cellKey, "down");
+          }
+          if (e.key === "ArrowUp") {
+            e.preventDefault();
+            navigateCell(cellKey, "up");
+          }
         }}
       >
         {value}
