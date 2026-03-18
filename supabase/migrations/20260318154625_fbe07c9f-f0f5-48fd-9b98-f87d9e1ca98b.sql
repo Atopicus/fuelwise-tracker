@@ -1,0 +1,1 @@
+ALTER TABLE descuentos ADD COLUMN orden_aplicacion INTEGER NOT NULL DEFAULT 1;
