@@ -353,14 +353,14 @@ export default function Repostajes() {
     const headers = [
       "Fecha", "Litros", "Coste/Litro", "Km Inicio", "Km Fin",
       "Bruto", "Total Descuentos", "Neto", "Total IVA", "Neto s/IVA",
-      "Neto/Litro", "Km Trip", "L/100km", "Coste/km s/IVA",
+      "Neto/Litro", "Km Trip", "L/100km", "Final/L", "Coste/km s/IVA",
     ];
     const csvRows = rows.map((r) => {
       const d = r.original;
       const bruto = d.litros * d.coste_litro;
       const { netoPagado, netoParaIva, totalDescuento } = calcDescuentos(bruto, d.descuento_ids, descuentos);
-      const netoSinIva = netoParaIva / (1 + iva / 100);
-      const totalIva = netoParaIva - netoSinIva;
+      const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
+      const netoSinIva = netoPagado - totalIva;
       const kmTrip = d.km_fin - d.km_inicio;
       return [
         d.fecha,
@@ -376,6 +376,7 @@ export default function Repostajes() {
         d.litros > 0 ? (netoPagado / d.litros).toFixed(4) : "",
         kmTrip,
         kmTrip > 0 ? ((d.litros / kmTrip) * 100).toFixed(2) : "",
+        d.litros > 0 ? (netoSinIva / d.litros).toFixed(4) : "",
         kmTrip > 0 ? (netoSinIva / kmTrip).toFixed(4) : "",
       ].join(",");
     });
