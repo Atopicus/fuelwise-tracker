@@ -194,6 +194,8 @@ function EditableCell({
           e.preventDefault();
           commitAndNavigate(e.shiftKey ? "prev" : "next");
         }
+        if (e.key === "ArrowDown") { e.preventDefault(); commitAndNavigate("down"); }
+        if (e.key === "ArrowUp") { e.preventDefault(); commitAndNavigate("up"); }
       }}
       className="h-7 text-sm px-2 border-primary ring-1 ring-primary tabular-nums"
       step={type === "number" ? "any" : undefined}
