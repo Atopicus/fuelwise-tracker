@@ -135,7 +135,7 @@ function EditableCell({
   useEffect(() => { setValue(String(initialValue)); }, [initialValue]);
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
 
-  const commitAndNavigate = (dir: "next" | "prev" | "down") => {
+  const commitAndNavigate = (dir: "next" | "prev" | "down" | "up") => {
     setEditing(false);
     onSave(value);
     setTimeout(() => navigateCell(cellKey, dir), 30);
