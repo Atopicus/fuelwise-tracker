@@ -472,24 +472,33 @@ export default function Repostajes() {
       calcCol("totalIva", "Total IVA", (r) => {
         const bruto = r.litros * r.coste_litro;
         const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        const netoSinIva = netoParaIva / (1 + iva / 100);
-        return (netoParaIva - netoSinIva).toFixed(2);
+        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
+        return totalIva.toFixed(2);
       }),
       calcCol("netoSinIva", "Neto s/IVA", (r) => {
         const bruto = r.litros * r.coste_litro;
-        const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        return (netoParaIva / (1 + iva / 100)).toFixed(2);
+        const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
+        return (netoPagado - totalIva).toFixed(2);
       }),
       calcCol("kmTrip", "Km Trip", (r) => String(r.km_fin - r.km_inicio)),
       calcCol("l100km", "L/100km", (r) => {
         const km = r.km_fin - r.km_inicio;
         return km > 0 ? ((r.litros / km) * 100).toFixed(2) : "—";
       }),
+      calcCol("finalLitro", "Final/L", (r) => {
+        const bruto = r.litros * r.coste_litro;
+        const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
+        const netoSinIva = netoPagado - totalIva;
+        return r.litros > 0 ? (netoSinIva / r.litros).toFixed(4) : "—";
+      }),
       calcCol("costeKm", "Coste/km s/IVA", (r) => {
         const km = r.km_fin - r.km_inicio;
         const bruto = r.litros * r.coste_litro;
-        const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        const netoSinIva = netoParaIva / (1 + iva / 100);
+        const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
+        const netoSinIva = netoPagado - totalIva;
         return km > 0 ? (netoSinIva / km).toFixed(4) : "—";
       }),
     ];
