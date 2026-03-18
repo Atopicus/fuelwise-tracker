@@ -5,7 +5,9 @@ import { useVehicleStore } from "@/stores/vehicleStore";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import {
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
 import { Fuel, TrendingDown, Gauge, DollarSign, Route } from "lucide-react";
 
 interface Repostaje {
@@ -21,8 +23,19 @@ export default function Dashboard() {
   const { user } = useAuth();
   const { activeVehicleId } = useVehicleStore();
   const [data, setData] = useState<Repostaje[]>([]);
+  const [iva, setIva] = useState(21);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+
+  useEffect(() => {
+    if (!user) return;
+    supabase
+      .from("configuracion")
+      .select("iva_porcentaje")
+      .eq("user_id", user.id)
+      .maybeSingle()
+      .then(({ data }) => { if (data) setIva(Number(data.iva_porcentaje)); });
+  }, [user]);
 
   useEffect(() => {
     if (!user || !activeVehicleId) return;
@@ -78,6 +91,14 @@ export default function Dashboard() {
     }));
   }, [data]);
 
+  // Precio por litro en cada repostaje (evolución cronológica)
+  const priceChartData = useMemo(() => {
+    return data.map((r) => ({
+      fecha: r.fecha,
+      precioLitro: r.coste_litro,
+    }));
+  }, [data]);
+
   const monthlyTable = useMemo(() => {
     const months: Record<string, Repostaje[]> = {};
     data.forEach((r) => {
@@ -89,17 +110,19 @@ export default function Dashboard() {
       const totalLiters = rows.reduce((s, r) => s + r.litros, 0);
       const totalSpent = rows.reduce((s, r) => s + r.litros * r.coste_litro, 0);
       const totalKm = rows.reduce((s, r) => s + (r.km_fin - r.km_inicio), 0);
+      const netoSinIva = totalSpent / (1 + iva / 100);
       return {
         month,
         totalLiters: totalLiters.toFixed(1),
         totalSpent: totalSpent.toFixed(2),
+        netoSinIva: netoSinIva.toFixed(2),
         avgCostLiter: totalLiters > 0 ? (totalSpent / totalLiters).toFixed(4) : "—",
         totalKm,
         avgConsumption: totalKm > 0 ? ((totalLiters / totalKm) * 100).toFixed(2) : "—",
         avgCostKm: totalKm > 0 ? (totalSpent / totalKm).toFixed(4) : "—",
       };
     });
-  }, [data]);
+  }, [data, iva]);
 
   if (!activeVehicleId) {
     return (
@@ -149,8 +172,8 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-6">
-        <Card className="lg:col-span-2 border-border shadow-sm">
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card className="border-border shadow-sm">
           <CardHeader>
             <CardTitle className="text-base font-semibold">Consumo por mes (L/100km)</CardTitle>
           </CardHeader>
@@ -169,34 +192,69 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card className="border-border shadow-sm overflow-auto">
+        <Card className="border-border shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base font-semibold">Resumen mensual</CardTitle>
+            <CardTitle className="text-base font-semibold">Evolución precio/litro (€/L)</CardTitle>
           </CardHeader>
-          <CardContent className="p-0">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-border bg-muted">
-                  <th className="text-left p-2 font-medium">Mes</th>
-                  <th className="text-right p-2 font-medium">Litros</th>
-                  <th className="text-right p-2 font-medium">Gastado</th>
-                  <th className="text-right p-2 font-medium">L/100km</th>
-                </tr>
-              </thead>
-              <tbody>
-                {monthlyTable.map((row) => (
-                  <tr key={row.month} className="border-b border-border last:border-0">
-                    <td className="p-2">{row.month}</td>
-                    <td className="p-2 text-right">{row.totalLiters}</td>
-                    <td className="p-2 text-right">{row.totalSpent} €</td>
-                    <td className="p-2 text-right">{row.avgConsumption}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <CardContent>
+            <div className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={priceChartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="fecha" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    stroke="hsl(var(--muted-foreground))"
+                    domain={["auto", "auto"]}
+                  />
+                  <Tooltip
+                    contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
+                    formatter={(value: number) => [`${value.toFixed(3)} €/L`, "Precio"]}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="precioLitro"
+                    stroke="hsl(var(--primary))"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: "hsl(var(--primary))" }}
+                    activeDot={{ r: 5 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
       </div>
+
+      <Card className="border-border shadow-sm overflow-auto">
+        <CardHeader>
+          <CardTitle className="text-base font-semibold">Resumen mensual</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border bg-muted">
+                <th className="text-left p-2 font-medium">Mes</th>
+                <th className="text-right p-2 font-medium">Litros</th>
+                <th className="text-right p-2 font-medium">Gastado</th>
+                <th className="text-right p-2 font-medium">Neto s/IVA</th>
+                <th className="text-right p-2 font-medium">L/100km</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthlyTable.map((row) => (
+                <tr key={row.month} className="border-b border-border last:border-0">
+                  <td className="p-2">{row.month}</td>
+                  <td className="p-2 text-right tabular-nums">{row.totalLiters}</td>
+                  <td className="p-2 text-right tabular-nums">{row.totalSpent} €</td>
+                  <td className="p-2 text-right tabular-nums">{row.netoSinIva} €</td>
+                  <td className="p-2 text-right tabular-nums">{row.avgConsumption}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
     </div>
   );
 }
