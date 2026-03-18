@@ -518,7 +518,7 @@ export default function Repostajes() {
   });
 
   const selectedCount = Object.keys(rowSelection).length;
-  const calculatedColIds = ["bruto","totalDescuentos","neto","netoLitro","totalIva","netoSinIva","kmTrip","l100km","costeKm"];
+  const calculatedColIds = ["bruto","totalDescuentos","neto","netoLitro","totalIva","netoSinIva","kmTrip","l100km","finalLitro","costeKm"];
 
   if (!activeVehicleId) {
     return (
