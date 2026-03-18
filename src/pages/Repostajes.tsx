@@ -34,13 +34,52 @@ interface Descuento {
   id: number;
   nombre: string;
   porcentaje: number;
+  orden_aplicacion: number;
+}
+
+// ─── Lógica de descuentos en cascada ─────────────────────────────────────────
+// Descuentos con el mismo orden se aplican simultáneamente sobre la misma base.
+// Ordenes diferentes se aplican en cascada (secuencialmente).
+// Orden 0 = se aplica sobre el total tras descuentos anteriores pero NO afecta al cálculo de IVA.
+// Retorna { netoPagado, netoParaIva } donde netoParaIva es el total antes de descuentos orden 0.
+function calcDescuentos(
+  bruto: number,
+  selectedIds: number[],
+  descuentos: Descuento[]
+): { netoPagado: number; netoParaIva: number; totalDescuento: number } {
+  const selected = descuentos.filter((d) => selectedIds.includes(d.id));
+  if (selected.length === 0) return { netoPagado: bruto, netoParaIva: bruto, totalDescuento: 0 };
+
+  // Agrupar por orden
+  const ordenes = [...new Set(selected.map((d) => d.orden_aplicacion))].sort((a, b) => a === 0 ? 1 : b === 0 ? -1 : a - b);
+  // Orden 0 siempre va al final
+
+  let base = bruto;
+  let netoParaIva = bruto; // se congela antes de aplicar orden 0
+
+  for (const orden of ordenes) {
+    if (orden === 0) {
+      // Congelar netoParaIva antes de aplicar orden 0
+      netoParaIva = base;
+    }
+    const grupoDescuentos = selected.filter((d) => d.orden_aplicacion === orden);
+    const sumPct = grupoDescuentos.reduce((s, d) => s + d.porcentaje, 0);
+    base = base - (base * sumPct) / 100;
+  }
+
+  // Si no hubo orden 0, netoParaIva = netoPagado
+  if (!selected.some((d) => d.orden_aplicacion === 0)) {
+    netoParaIva = base;
+  }
+
+  return {
+    netoPagado: base,
+    netoParaIva,
+    totalDescuento: bruto - base,
+  };
 }
 
 // ─── Navegación entre celdas editables ──────────────────────────────────────
-// Cada celda editable tiene data-editable="true" y un data-cell-key="rowId-colIndex"
-// Tab/Shift+Tab navega entre celdas de la misma fila
-// Enter baja a la misma columna en la siguiente fila
-
 function navigateCell(currentKey: string, direction: "next" | "prev" | "down") {
   const all = Array.from(
     document.querySelectorAll<HTMLElement>('[data-editable="true"]')
@@ -50,7 +89,6 @@ function navigateCell(currentKey: string, direction: "next" | "prev" | "down") {
 
   let targetIndex: number;
   if (direction === "down") {
-    // Misma columna, siguiente fila
     const [, colStr] = currentKey.split("-");
     const col = Number(colStr);
     const nextSameCol = all.findIndex(
@@ -91,7 +129,6 @@ function EditableCell({
   const commitAndNavigate = (dir: "next" | "prev" | "down") => {
     setEditing(false);
     onSave(value);
-    // Pequeño delay para que el estado se actualice antes de mover el foco
     setTimeout(() => navigateCell(cellKey, dir), 30);
   };
 
@@ -104,7 +141,7 @@ function EditableCell({
         tabIndex={0}
         className="cursor-pointer px-2 py-1.5 min-h-[30px] hover:bg-primary/10 rounded
                    focus:outline-none focus:ring-2 focus:ring-primary/40 focus:bg-primary/5
-                   transition-colors duration-100 text-sm"
+                   transition-colors duration-100 text-sm tabular-nums"
         onDoubleClick={() => setEditing(true)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === "F2") {
@@ -133,7 +170,7 @@ function EditableCell({
           commitAndNavigate(e.shiftKey ? "prev" : "next");
         }
       }}
-      className="h-7 text-sm px-2 border-primary ring-1 ring-primary"
+      className="h-7 text-sm px-2 border-primary ring-1 ring-primary tabular-nums"
       step={type === "number" ? "any" : undefined}
     />
   );
@@ -156,6 +193,7 @@ function DiscountCell({
 
   const display = descuentos
     .filter((d) => selected.includes(d.id))
+    .sort((a, b) => a.orden_aplicacion - b.orden_aplicacion)
     .map((d) => `${d.nombre} ${d.porcentaje}%`)
     .join(", ") || "—";
 
@@ -164,15 +202,17 @@ function DiscountCell({
       <PopoverTrigger asChild>
         <div
           className="cursor-pointer px-2 py-1.5 min-h-[30px] hover:bg-primary/10 rounded
-                     transition-colors duration-100 text-xs truncate max-w-[180px]"
+                     transition-colors duration-100 text-sm truncate max-w-[200px]"
           onDoubleClick={() => setOpen(true)}
         >
           {display}
         </div>
       </PopoverTrigger>
-      <PopoverContent className="w-56 p-2 pointer-events-auto" align="start">
+      <PopoverContent className="w-64 p-2 pointer-events-auto" align="start">
         <div className="space-y-1">
-          {descuentos.map((d) => (
+          {descuentos
+            .sort((a, b) => a.orden_aplicacion - b.orden_aplicacion)
+            .map((d) => (
             <label
               key={d.id}
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-muted cursor-pointer"
@@ -185,7 +225,8 @@ function DiscountCell({
                   )
                 }
               />
-              {d.nombre} ({d.porcentaje}%)
+              <span className="flex-1">{d.nombre} ({d.porcentaje}%)</span>
+              <span className="text-xs text-muted-foreground">Ord. {d.orden_aplicacion}</span>
             </label>
           ))}
           {descuentos.length === 0 && (
@@ -233,7 +274,7 @@ export default function Repostajes() {
       .from("descuentos")
       .select("*")
       .eq("user_id", user.id)
-      .then(({ data }) => setDescuentos(data || []));
+      .then(({ data }) => setDescuentos((data as any) || []));
     supabase
       .from("configuracion")
       .select("iva_porcentaje")
@@ -311,18 +352,15 @@ export default function Repostajes() {
     const rows = table.getFilteredRowModel().rows;
     const headers = [
       "Fecha", "Litros", "Coste/Litro", "Km Inicio", "Km Fin",
-      "Bruto", "Total Descuentos", "Neto", "Neto s/IVA",
+      "Bruto", "Total Descuentos", "Neto", "Total IVA", "Neto s/IVA",
       "Neto/Litro", "Km Trip", "L/100km", "Coste/km s/IVA",
     ];
     const csvRows = rows.map((r) => {
       const d = r.original;
       const bruto = d.litros * d.coste_litro;
-      const discPct = d.descuento_ids.reduce(
-        (s, id) => s + (descuentos.find((dd) => dd.id === id)?.porcentaje || 0), 0
-      );
-      const totalDesc = (bruto * discPct) / 100;
-      const neto = bruto - totalDesc;
-      const netoSinIva = neto / (1 + iva / 100); // ← sin IVA
+      const { netoPagado, netoParaIva, totalDescuento } = calcDescuentos(bruto, d.descuento_ids, descuentos);
+      const netoSinIva = netoParaIva / (1 + iva / 100);
+      const totalIva = netoParaIva - netoSinIva;
       const kmTrip = d.km_fin - d.km_inicio;
       return [
         d.fecha,
@@ -331,13 +369,14 @@ export default function Repostajes() {
         d.km_inicio,
         d.km_fin,
         bruto.toFixed(2),
-        totalDesc.toFixed(2),
-        neto.toFixed(2),
+        totalDescuento.toFixed(2),
+        netoPagado.toFixed(2),
+        totalIva.toFixed(2),
         netoSinIva.toFixed(2),
-        d.litros > 0 ? (neto / d.litros).toFixed(4) : "",
+        d.litros > 0 ? (netoPagado / d.litros).toFixed(4) : "",
         kmTrip,
         kmTrip > 0 ? ((d.litros / kmTrip) * 100).toFixed(2) : "",
-        kmTrip > 0 ? (netoSinIva / kmTrip).toFixed(4) : "", // ← coste/km sin IVA
+        kmTrip > 0 ? (netoSinIva / kmTrip).toFixed(4) : "",
       ].join(",");
     });
     const csv = [headers.join(","), ...csvRows].join("\n");
@@ -350,12 +389,6 @@ export default function Repostajes() {
 
   // ─── Columnas ───────────────────────────────────────────────────────────────
   const columns = useMemo<ColumnDef<Repostaje>[]>(() => {
-    const discountPct = (row: Repostaje) =>
-      row.descuento_ids.reduce(
-        (s, id) => s + (descuentos.find((d) => d.id === id)?.porcentaje || 0), 0
-      );
-
-    // colIndex se usa para generar cellKey y permitir navegación por columna (Enter)
     const editableCol = (
       accessorKey: keyof Repostaje,
       header: string,
@@ -374,6 +407,13 @@ export default function Repostajes() {
           }
         />
       ),
+    });
+
+    const calcCol = (id: string, header: string, fn: (r: Repostaje) => string): ColumnDef<Repostaje> => ({
+      id,
+      header,
+      accessorFn: fn,
+      enableColumnFilter: false,
     });
 
     return [
@@ -396,13 +436,12 @@ export default function Repostajes() {
         enableSorting: false,
         enableColumnFilter: false,
       },
-      // Columnas editables (colIndex 1–5)
       editableCol("fecha", "Fecha", "date", 1),
       editableCol("litros", "Litros", "number", 2),
       editableCol("coste_litro", "Coste/Litro", "number", 3),
       editableCol("km_inicio", "Km Inicio", "number", 4),
       editableCol("km_fin", "Km Fin", "number", 5),
-      // Descuentos (colIndex 6)
+      // Descuentos
       {
         id: "descuentos",
         header: "Descuentos",
@@ -415,76 +454,44 @@ export default function Repostajes() {
         ),
         enableSorting: false,
       },
-      // Columnas calculadas (solo lectura)
-      {
-        id: "bruto",
-        header: "Bruto",
-        accessorFn: (r) => (r.litros * r.coste_litro).toFixed(2),
-        enableColumnFilter: false,
-      },
-      {
-        id: "totalDescuentos",
-        header: "Dto. Total",
-        accessorFn: (r) => ((r.litros * r.coste_litro * discountPct(r)) / 100).toFixed(2),
-        enableColumnFilter: false,
-      },
-      {
-        id: "neto",
-        header: "Neto",
-        accessorFn: (r) => {
-          const bruto = r.litros * r.coste_litro;
-          return (bruto - (bruto * discountPct(r)) / 100).toFixed(2);
-        },
-        enableColumnFilter: false,
-      },
-      {
-        id: "netoLitro",
-        header: "Neto/L",
-        accessorFn: (r) => {
-          const bruto = r.litros * r.coste_litro;
-          const neto = bruto - (bruto * discountPct(r)) / 100;
-          return r.litros > 0 ? (neto / r.litros).toFixed(4) : "—";
-        },
-        enableColumnFilter: false,
-      },
-      {
-        id: "netoSinIva",
-        header: "Neto s/IVA",
-        accessorFn: (r) => {
-          const bruto = r.litros * r.coste_litro;
-          const neto = bruto - (bruto * discountPct(r)) / 100;
-          return (neto / (1 + iva / 100)).toFixed(2);
-        },
-        enableColumnFilter: false,
-      },
-      {
-        id: "kmTrip",
-        header: "Km Trip",
-        accessorFn: (r) => r.km_fin - r.km_inicio,
-        enableColumnFilter: false,
-      },
-      {
-        id: "l100km",
-        header: "L/100km",
-        accessorFn: (r) => {
-          const km = r.km_fin - r.km_inicio;
-          return km > 0 ? ((r.litros / km) * 100).toFixed(2) : "—";
-        },
-        enableColumnFilter: false,
-      },
-      {
-        // ← CORREGIDO: coste/km usando neto SIN IVA
-        id: "costeKm",
-        header: "Coste/km s/IVA",
-        accessorFn: (r) => {
-          const km = r.km_fin - r.km_inicio;
-          const bruto = r.litros * r.coste_litro;
-          const neto = bruto - (bruto * discountPct(r)) / 100;
-          const netoSinIva = neto / (1 + iva / 100);
-          return km > 0 ? (netoSinIva / km).toFixed(4) : "—";
-        },
-        enableColumnFilter: false,
-      },
+      // Columnas calculadas
+      calcCol("bruto", "Bruto", (r) => (r.litros * r.coste_litro).toFixed(2)),
+      calcCol("totalDescuentos", "Dto. Total", (r) => {
+        const bruto = r.litros * r.coste_litro;
+        return calcDescuentos(bruto, r.descuento_ids, descuentos).totalDescuento.toFixed(2);
+      }),
+      calcCol("neto", "Neto", (r) => {
+        const bruto = r.litros * r.coste_litro;
+        return calcDescuentos(bruto, r.descuento_ids, descuentos).netoPagado.toFixed(2);
+      }),
+      calcCol("netoLitro", "Neto/L", (r) => {
+        const bruto = r.litros * r.coste_litro;
+        const { netoPagado } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+        return r.litros > 0 ? (netoPagado / r.litros).toFixed(4) : "—";
+      }),
+      calcCol("totalIva", "Total IVA", (r) => {
+        const bruto = r.litros * r.coste_litro;
+        const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+        const netoSinIva = netoParaIva / (1 + iva / 100);
+        return (netoParaIva - netoSinIva).toFixed(2);
+      }),
+      calcCol("netoSinIva", "Neto s/IVA", (r) => {
+        const bruto = r.litros * r.coste_litro;
+        const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+        return (netoParaIva / (1 + iva / 100)).toFixed(2);
+      }),
+      calcCol("kmTrip", "Km Trip", (r) => String(r.km_fin - r.km_inicio)),
+      calcCol("l100km", "L/100km", (r) => {
+        const km = r.km_fin - r.km_inicio;
+        return km > 0 ? ((r.litros / km) * 100).toFixed(2) : "—";
+      }),
+      calcCol("costeKm", "Coste/km s/IVA", (r) => {
+        const km = r.km_fin - r.km_inicio;
+        const bruto = r.litros * r.coste_litro;
+        const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+        const netoSinIva = netoParaIva / (1 + iva / 100);
+        return km > 0 ? (netoSinIva / km).toFixed(4) : "—";
+      }),
     ];
   }, [descuentos, iva]);
 
@@ -502,6 +509,7 @@ export default function Repostajes() {
   });
 
   const selectedCount = Object.keys(rowSelection).length;
+  const calculatedColIds = ["bruto","totalDescuentos","neto","netoLitro","totalIva","netoSinIva","kmTrip","l100km","costeKm"];
 
   if (!activeVehicleId) {
     return (
@@ -514,7 +522,6 @@ export default function Repostajes() {
 
   return (
     <div className="space-y-4">
-      {/* Barra de acciones */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Repostajes</h1>
@@ -539,9 +546,8 @@ export default function Repostajes() {
 
       {/* Grid */}
       <div className="border border-border rounded-lg shadow-sm overflow-auto bg-card">
-        <table className="w-full text-sm border-collapse">
+        <table className="w-full border-collapse">
           <thead className="sticky top-0 z-10">
-            {/* Fila de encabezados */}
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="bg-muted border-b-2 border-border">
                 {hg.headers.map((header) => (
@@ -562,7 +568,6 @@ export default function Repostajes() {
                 ))}
               </tr>
             ))}
-            {/* Fila de filtros */}
             <tr className="bg-muted/60 border-b border-border">
               {table.getHeaderGroups()[0].headers.map((header) => (
                 <th key={`filter-${header.id}`} className="px-1 py-1">
@@ -584,13 +589,9 @@ export default function Repostajes() {
                 key={row.id}
                 className={[
                   "border-b border-border/60 transition-colors duration-150 group",
-                  // Zebra más contrastada
                   i % 2 === 0 ? "bg-card" : "bg-muted/40",
-                  // Hover visible
                   "hover:bg-primary/5",
-                  // Fila seleccionada
                   row.getIsSelected() ? "!bg-primary/10 border-l-2 border-l-primary" : "",
-                  // Flash verde al guardar
                   flashRow === row.original.id ? "animate-save-flash" : "",
                 ].join(" ")}
               >
@@ -598,11 +599,9 @@ export default function Repostajes() {
                   <td
                     key={cell.id}
                     className={[
-                      "px-1 py-0 whitespace-nowrap",
-                      // Columnas calculadas en gris más claro
-                      ["bruto","totalDescuentos","neto","netoLitro","netoSinIva","kmTrip","l100km","costeKm"]
-                        .includes(cell.column.id)
-                        ? "text-muted-foreground text-xs font-mono px-3"
+                      "px-1 py-0 whitespace-nowrap text-sm tabular-nums",
+                      calculatedColIds.includes(cell.column.id)
+                        ? "text-muted-foreground px-3"
                         : "",
                     ].join(" ")}
                   >
@@ -613,7 +612,7 @@ export default function Repostajes() {
             ))}
             {data.length === 0 && (
               <tr>
-                <td colSpan={columns.length} className="p-10 text-center text-muted-foreground">
+                <td colSpan={columns.length} className="p-10 text-center text-muted-foreground text-sm">
                   Sin repostajes. Pulsa "Añadir fila" para empezar.
                 </td>
               </tr>
@@ -622,13 +621,11 @@ export default function Repostajes() {
         </table>
       </div>
 
-      {/* Total de filas visible */}
       <p className="text-xs text-muted-foreground text-right">
         {table.getFilteredRowModel().rows.length} repostaje(s)
         {selectedCount > 0 && ` · ${selectedCount} seleccionado(s)`}
       </p>
 
-      {/* Modal eliminar */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>

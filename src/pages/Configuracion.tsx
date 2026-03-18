@@ -14,6 +14,7 @@ interface Descuento {
   id: number;
   nombre: string;
   porcentaje: number;
+  orden_aplicacion: number;
 }
 
 export default function Configuracion() {
@@ -24,9 +25,11 @@ export default function Configuracion() {
   const [descuentos, setDescuentos] = useState<Descuento[]>([]);
   const [newNombre, setNewNombre] = useState("");
   const [newPorcentaje, setNewPorcentaje] = useState("");
+  const [newOrden, setNewOrden] = useState("1");
   const [editTarget, setEditTarget] = useState<Descuento | null>(null);
   const [editNombre, setEditNombre] = useState("");
   const [editPorcentaje, setEditPorcentaje] = useState("");
+  const [editOrden, setEditOrden] = useState("1");
   const [deleteTarget, setDeleteTarget] = useState<Descuento | null>(null);
 
   useEffect(() => {
@@ -40,7 +43,7 @@ export default function Configuracion() {
   const fetchDescuentos = async () => {
     if (!user) return;
     const { data } = await supabase.from("descuentos").select("*").eq("user_id", user.id).order("created_at");
-    setDescuentos(data || []);
+    setDescuentos((data as any) || []);
   };
 
   const saveIva = async () => {
@@ -53,15 +56,24 @@ export default function Configuracion() {
 
   const addDescuento = async () => {
     if (!user || !newNombre || !newPorcentaje) return;
-    await supabase.from("descuentos").insert({ user_id: user.id, nombre: newNombre, porcentaje: Number(newPorcentaje) });
-    setNewNombre(""); setNewPorcentaje("");
+    await supabase.from("descuentos").insert({
+      user_id: user.id,
+      nombre: newNombre,
+      porcentaje: Number(newPorcentaje),
+      orden_aplicacion: Number(newOrden),
+    });
+    setNewNombre(""); setNewPorcentaje(""); setNewOrden("1");
     toast({ title: "Descuento añadido" });
     fetchDescuentos();
   };
 
   const saveEdit = async () => {
     if (!editTarget) return;
-    await supabase.from("descuentos").update({ nombre: editNombre, porcentaje: Number(editPorcentaje) }).eq("id", editTarget.id);
+    await supabase.from("descuentos").update({
+      nombre: editNombre,
+      porcentaje: Number(editPorcentaje),
+      orden_aplicacion: Number(editOrden),
+    }).eq("id", editTarget.id);
     toast({ title: "Descuento actualizado" });
     setEditTarget(null);
     fetchDescuentos();
@@ -75,7 +87,12 @@ export default function Configuracion() {
     fetchDescuentos();
   };
 
-  const openEdit = (d: Descuento) => { setEditTarget(d); setEditNombre(d.nombre); setEditPorcentaje(String(d.porcentaje)); };
+  const openEdit = (d: Descuento) => {
+    setEditTarget(d);
+    setEditNombre(d.nombre);
+    setEditPorcentaje(String(d.porcentaje));
+    setEditOrden(String(d.orden_aplicacion));
+  };
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -93,21 +110,39 @@ export default function Configuracion() {
       </Card>
 
       <Card className="border-border shadow-sm">
-        <CardHeader><CardTitle className="text-base">Descuentos</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-base">Descuentos</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Mismo orden = se aplican simultáneamente. Diferente orden = en cascada.
+            Orden 0 = no afecta al IVA.
+          </p>
+        </CardHeader>
         <CardContent className="space-y-4">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-muted">
                 <th className="text-left p-2 font-medium">Nombre</th>
                 <th className="text-right p-2 font-medium">Porcentaje (%)</th>
+                <th className="text-right p-2 font-medium">Orden</th>
                 <th className="text-right p-2 font-medium">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {descuentos.map((d) => (
+              {descuentos
+                .sort((a, b) => a.orden_aplicacion - b.orden_aplicacion)
+                .map((d) => (
                 <tr key={d.id} className="border-b border-border last:border-0">
                   <td className="p-2">{d.nombre}</td>
                   <td className="p-2 text-right">{d.porcentaje}%</td>
+                  <td className="p-2 text-right">
+                    <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-medium ${
+                      d.orden_aplicacion === 0
+                        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                        : "bg-muted text-muted-foreground"
+                    }`}>
+                      {d.orden_aplicacion}
+                    </span>
+                  </td>
                   <td className="p-2 text-right space-x-1">
                     <Button variant="ghost" size="icon" onClick={() => openEdit(d)}><Pencil className="h-3 w-3" /></Button>
                     <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(d)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
@@ -122,9 +157,13 @@ export default function Configuracion() {
               <Label className="text-xs">Nombre</Label>
               <Input value={newNombre} onChange={(e) => setNewNombre(e.target.value)} placeholder="ING" className="h-9" />
             </div>
-            <div className="w-24 space-y-1">
+            <div className="w-20 space-y-1">
               <Label className="text-xs">%</Label>
               <Input type="number" value={newPorcentaje} onChange={(e) => setNewPorcentaje(e.target.value)} placeholder="3" className="h-9" />
+            </div>
+            <div className="w-20 space-y-1">
+              <Label className="text-xs">Orden</Label>
+              <Input type="number" value={newOrden} onChange={(e) => setNewOrden(e.target.value)} placeholder="1" className="h-9" />
             </div>
             <Button size="sm" onClick={addDescuento} disabled={!newNombre || !newPorcentaje}><Plus className="h-4 w-4" /></Button>
           </div>
@@ -137,6 +176,11 @@ export default function Configuracion() {
           <div className="space-y-4">
             <div className="space-y-2"><Label>Nombre</Label><Input value={editNombre} onChange={(e) => setEditNombre(e.target.value)} /></div>
             <div className="space-y-2"><Label>Porcentaje (%)</Label><Input type="number" value={editPorcentaje} onChange={(e) => setEditPorcentaje(e.target.value)} /></div>
+            <div className="space-y-2">
+              <Label>Orden de aplicación</Label>
+              <Input type="number" value={editOrden} onChange={(e) => setEditOrden(e.target.value)} />
+              <p className="text-xs text-muted-foreground">0 = no afecta al IVA. Mismo número = simultáneos. Diferente = cascada.</p>
+            </div>
           </div>
           <DialogFooter><Button onClick={saveEdit}>Guardar</Button></DialogFooter>
         </DialogContent>
