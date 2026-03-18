@@ -80,7 +80,7 @@ function calcDescuentos(
 }
 
 // ─── Navegación entre celdas editables ──────────────────────────────────────
-function navigateCell(currentKey: string, direction: "next" | "prev" | "down") {
+function navigateCell(currentKey: string, direction: "next" | "prev" | "down" | "up") {
   const all = Array.from(
     document.querySelectorAll<HTMLElement>('[data-editable="true"]')
   );
@@ -88,13 +88,22 @@ function navigateCell(currentKey: string, direction: "next" | "prev" | "down") {
   if (currentIndex === -1) return;
 
   let targetIndex: number;
-  if (direction === "down") {
+  if (direction === "down" || direction === "up") {
     const [, colStr] = currentKey.split("-");
     const col = Number(colStr);
-    const nextSameCol = all.findIndex(
-      (el, i) => i > currentIndex && Number(el.dataset.cellKey?.split("-")[1]) === col
-    );
-    targetIndex = nextSameCol !== -1 ? nextSameCol : currentIndex;
+    if (direction === "down") {
+      const nextSameCol = all.findIndex(
+        (el, i) => i > currentIndex && Number(el.dataset.cellKey?.split("-")[1]) === col
+      );
+      targetIndex = nextSameCol !== -1 ? nextSameCol : currentIndex;
+    } else {
+      // up: find previous element with same column
+      let found = -1;
+      for (let i = currentIndex - 1; i >= 0; i--) {
+        if (Number(all[i].dataset.cellKey?.split("-")[1]) === col) { found = i; break; }
+      }
+      targetIndex = found !== -1 ? found : currentIndex;
+    }
   } else {
     targetIndex = direction === "next" ? currentIndex + 1 : currentIndex - 1;
   }
