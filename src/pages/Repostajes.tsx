@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { fmtNum } from "@/lib/format";
 import { useAuth } from "@/hooks/useAuth";
 import { useVehicleStore } from "@/stores/vehicleStore";
 import { Button } from "@/components/ui/button";
@@ -483,43 +484,43 @@ export default function Repostajes() {
         enableSorting: false,
       },
       // Columnas calculadas
-      calcCol("bruto", "Bruto", (r) => (r.litros * r.coste_litro).toFixed(2)),
+      calcCol("bruto", "Bruto", (r) => fmtNum(r.litros * r.coste_litro)),
       calcCol("totalDescuentos", "Dto. Total", (r) => {
         const bruto = r.litros * r.coste_litro;
-        return calcDescuentos(bruto, r.descuento_ids, descuentos).totalDescuento.toFixed(2);
+        return fmtNum(calcDescuentos(bruto, r.descuento_ids, descuentos).totalDescuento);
       }),
       calcCol("neto", "Neto", (r) => {
         const bruto = r.litros * r.coste_litro;
-        return calcDescuentos(bruto, r.descuento_ids, descuentos).netoPagado.toFixed(2);
+        return fmtNum(calcDescuentos(bruto, r.descuento_ids, descuentos).netoPagado);
       }),
       calcCol("netoLitro", "Neto/L", (r) => {
         const bruto = r.litros * r.coste_litro;
         const { netoPagado } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        return r.litros > 0 ? (netoPagado / r.litros).toFixed(4) : "—";
+        return r.litros > 0 ? fmtNum(netoPagado / r.litros, 4) : "—";
       }),
       calcCol("totalIva", "Total IVA", (r) => {
         const bruto = r.litros * r.coste_litro;
         const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
         const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
-        return totalIva.toFixed(2);
+        return fmtNum(totalIva);
       }),
       calcCol("netoSinIva", "Neto s/IVA", (r) => {
         const bruto = r.litros * r.coste_litro;
         const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
         const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
-        return (netoPagado - totalIva).toFixed(2);
+        return fmtNum(netoPagado - totalIva);
       }),
       calcCol("kmTrip", "Km Trip", (r) => String(r.km_fin - r.km_inicio)),
       calcCol("l100km", "L/100km", (r) => {
         const km = r.km_fin - r.km_inicio;
-        return km > 0 ? ((r.litros / km) * 100).toFixed(2) : "—";
+        return km > 0 ? fmtNum((r.litros / km) * 100) : "—";
       }),
       calcCol("finalLitro", "Final/L", (r) => {
         const bruto = r.litros * r.coste_litro;
         const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
         const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
         const netoSinIva = netoPagado - totalIva;
-        return r.litros > 0 ? (netoSinIva / r.litros).toFixed(4) : "—";
+        return r.litros > 0 ? fmtNum(netoSinIva / r.litros, 4) : "—";
       }),
       calcCol("costeKm", "Coste/km s/IVA", (r) => {
         const km = r.km_fin - r.km_inicio;
@@ -527,7 +528,7 @@ export default function Repostajes() {
         const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
         const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
         const netoSinIva = netoPagado - totalIva;
-        return km > 0 ? (netoSinIva / km).toFixed(4) : "—";
+        return km > 0 ? fmtNum(netoSinIva / km, 4) : "—";
       }),
     ];
   }, [descuentos, iva]);

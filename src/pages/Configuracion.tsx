@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -7,14 +7,30 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Save } from "lucide-react";
+import { Plus, Pencil, Trash2, Save, Upload, FileSpreadsheet } from "lucide-react";
+import * as XLSX from "xlsx";
 
 interface Descuento {
   id: number;
   nombre: string;
   porcentaje: number;
   orden_aplicacion: number;
+}
+
+interface Vehicle {
+  id: number;
+  matricula: string;
+  modelo: string;
+}
+
+interface ImportRow {
+  fecha: string;
+  litros: number;
+  coste_litro: number;
+  km_inicio: number;
+  km_fin: number;
 }
 
 export default function Configuracion() {
@@ -32,12 +48,21 @@ export default function Configuracion() {
   const [editOrden, setEditOrden] = useState("1");
   const [deleteTarget, setDeleteTarget] = useState<Descuento | null>(null);
 
+  // Import state
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [importVehicleId, setImportVehicleId] = useState<string>("");
+  const [importData, setImportData] = useState<ImportRow[]>([]);
+  const [importing, setImporting] = useState(false);
+
   useEffect(() => {
     if (!user) return;
     supabase.from("configuracion").select("*").eq("user_id", user.id).maybeSingle().then(({ data }) => {
       if (data) setIva(String(data.iva_porcentaje));
     });
     fetchDescuentos();
+    supabase.from("vehiculos").select("*").eq("user_id", user.id).order("created_at").then(({ data }) => {
+      setVehicles((data as Vehicle[]) || []);
+    });
   }, [user]);
 
   const fetchDescuentos = async () => {
@@ -92,6 +117,86 @@ export default function Configuracion() {
     setEditNombre(d.nombre);
     setEditPorcentaje(String(d.porcentaje));
     setEditOrden(String(d.orden_aplicacion));
+  };
+
+  // ─── Import logic ──────────────────────────────────────────────────────────
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    const isCSV = file.name.toLowerCase().endsWith(".csv");
+
+    reader.onload = (ev) => {
+      try {
+        let rows: ImportRow[] = [];
+
+        if (isCSV) {
+          const text = ev.target?.result as string;
+          const lines = text.split(/\r?\n/).filter((l) => l.trim());
+          // Skip header
+          for (let i = 1; i < lines.length; i++) {
+            const parts = lines[i].split(/[;,]/);
+            if (parts.length < 5) continue;
+            rows.push({
+              fecha: parts[0].trim(),
+              litros: Number(parts[1].trim().replace(",", ".")),
+              coste_litro: Number(parts[2].trim().replace(",", ".")),
+              km_inicio: Number(parts[3].trim().replace(",", ".")),
+              km_fin: Number(parts[4].trim().replace(",", ".")),
+            });
+          }
+        } else {
+          const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: "array" });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json<any>(sheet);
+          rows = json.map((r: any) => ({
+            fecha: String(r["fecha"] || r["Fecha"] || ""),
+            litros: Number(r["litros"] || r["Litros"] || 0),
+            coste_litro: Number(r["coste_litro"] || r["Coste/Litro"] || r["coste litro"] || 0),
+            km_inicio: Number(r["km_inicio"] || r["Km Inicio"] || r["km inicio"] || 0),
+            km_fin: Number(r["km_fin"] || r["Km Fin"] || r["km fin"] || 0),
+          }));
+        }
+
+        setImportData(rows.filter((r) => r.fecha && r.litros > 0));
+        toast({ title: `${rows.length} fila(s) leída(s) del archivo` });
+      } catch {
+        toast({ title: "Error al leer el archivo", variant: "destructive" });
+      }
+    };
+
+    if (isCSV) reader.readAsText(file);
+    else reader.readAsArrayBuffer(file);
+
+    // Reset file input
+    e.target.value = "";
+  }, [toast]);
+
+  const executeImport = async () => {
+    if (!user || !importVehicleId || importData.length === 0) return;
+    setImporting(true);
+    const vehicleId = Number(importVehicleId);
+
+    const insertRows = importData.map((r) => ({
+      user_id: user.id,
+      vehiculo_id: vehicleId,
+      fecha: r.fecha,
+      litros: r.litros,
+      coste_litro: r.coste_litro,
+      km_inicio: r.km_inicio,
+      km_fin: r.km_fin,
+    }));
+
+    const { error } = await supabase.from("repostajes").insert(insertRows);
+    if (error) {
+      toast({ title: "Error al importar", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: `${insertRows.length} repostaje(s) importado(s)` });
+      setImportData([]);
+    }
+    setImporting(false);
   };
 
   return (
@@ -167,6 +272,96 @@ export default function Configuracion() {
             </div>
             <Button size="sm" onClick={addDescuento} disabled={!newNombre || !newPorcentaje}><Plus className="h-4 w-4" /></Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ─── Importación de datos ──────────────────────────────────────────── */}
+      <Card className="border-border shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileSpreadsheet className="h-4 w-4" /> Importar repostajes
+          </CardTitle>
+          <div className="text-xs text-muted-foreground space-y-1 mt-2">
+            <p>Sube un archivo <strong>CSV</strong> o <strong>Excel (.xlsx / .xls)</strong> con las siguientes columnas:</p>
+            <code className="block bg-muted px-2 py-1 rounded text-[11px]">
+              fecha ; litros ; coste_litro ; km_inicio ; km_fin
+            </code>
+            <p>• El separador de columnas puede ser <strong>;</strong> o <strong>,</strong></p>
+            <p>• Los decimales pueden usar punto o coma (se convierten automáticamente)</p>
+            <p>• La fecha debe estar en formato <strong>AAAA-MM-DD</strong> (ej: 2025-06-15)</p>
+            <p>• La primera fila debe contener los nombres de las columnas</p>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label className="text-xs">Vehículo destino</Label>
+            <Select value={importVehicleId} onValueChange={setImportVehicleId}>
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="Selecciona un vehículo" />
+              </SelectTrigger>
+              <SelectContent>
+                {vehicles.map((v) => (
+                  <SelectItem key={v.id} value={String(v.id)}>
+                    {v.matricula} — {v.modelo}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-xs">Archivo CSV o Excel</Label>
+            <Input
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              onChange={handleFileChange}
+              className="h-9 text-sm file:mr-3 file:text-xs"
+              disabled={!importVehicleId}
+            />
+          </div>
+
+          {importData.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-sm font-medium">{importData.length} fila(s) listas para importar</p>
+              <div className="max-h-48 overflow-auto border border-border rounded">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-muted border-b border-border">
+                      <th className="text-left p-1.5 font-medium">Fecha</th>
+                      <th className="text-right p-1.5 font-medium">Litros</th>
+                      <th className="text-right p-1.5 font-medium">€/L</th>
+                      <th className="text-right p-1.5 font-medium">Km ini</th>
+                      <th className="text-right p-1.5 font-medium">Km fin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importData.slice(0, 20).map((r, i) => (
+                      <tr key={i} className="border-b border-border/50 last:border-0">
+                        <td className="p-1.5">{r.fecha}</td>
+                        <td className="p-1.5 text-right tabular-nums">{r.litros}</td>
+                        <td className="p-1.5 text-right tabular-nums">{r.coste_litro}</td>
+                        <td className="p-1.5 text-right tabular-nums">{r.km_inicio}</td>
+                        <td className="p-1.5 text-right tabular-nums">{r.km_fin}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {importData.length > 20 && (
+                  <p className="text-xs text-muted-foreground text-center py-1">
+                    … y {importData.length - 20} filas más
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={executeImport} disabled={importing}>
+                  <Upload className="h-4 w-4 mr-1" /> {importing ? "Importando..." : "Importar"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setImportData([])}>
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
