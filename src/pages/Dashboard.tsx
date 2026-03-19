@@ -242,21 +242,23 @@ export default function Dashboard() {
       </div>
 
       {stats && (
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           {[
-            { title: "Total Gastado", value: `${stats.totalSpent} €`, icon: DollarSign },
+            { title: "Total Bruto", value: `${stats.totalSpent} €`, icon: DollarSign },
+            { title: "Total Neto s/IVA", value: `${stats.totalNetoSinIva} €`, icon: DollarSign },
+            { title: "Media Neto s/IVA/mes", value: `${stats.avgNetoSinIvaMes} €`, icon: TrendingDown },
             { title: "Total Litros", value: `${stats.totalLiters} L`, icon: Fuel },
             { title: "Total Km", value: `${stats.totalKm} km`, icon: Route },
             { title: "Consumo Medio", value: `${stats.avgConsumption} L/100km`, icon: Gauge },
             { title: "Coste/km", value: `${stats.avgCostPerKm} €/km`, icon: TrendingDown },
           ].map((s) => (
             <Card key={s.title} className="border-border shadow-sm">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground">{s.title}</CardTitle>
-                <s.icon className="h-4 w-4 text-primary" />
+              <CardHeader className="flex flex-row items-center justify-between pb-1 p-3">
+                <CardTitle className="text-[0.65rem] leading-tight font-medium text-muted-foreground">{s.title}</CardTitle>
+                <s.icon className="h-3.5 w-3.5 text-primary shrink-0" />
               </CardHeader>
-              <CardContent>
-                <p className="text-xl font-semibold">{s.value}</p>
+              <CardContent className="p-3 pt-0">
+                <p className="text-base font-semibold leading-tight">{s.value}</p>
               </CardContent>
             </Card>
           ))}
