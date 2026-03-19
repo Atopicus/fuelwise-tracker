@@ -111,10 +111,12 @@ export default function Dashboard() {
   const stats = useMemo(() => {
     if (filteredData.length === 0) return null;
     let totalSpent = 0, totalLiters = 0, totalKm = 0, totalConsumption = 0, consumptionCount = 0;
+    let totalNetoSinIva = 0;
     filteredData.forEach((r) => {
       const bruto = r.litros * r.coste_litro;
       totalSpent += bruto;
       totalLiters += r.litros;
+      totalNetoSinIva += calcNetoSinIva(r);
       const km = r.km_fin - r.km_inicio;
       totalKm += km;
       if (km > 0) {
@@ -122,14 +124,18 @@ export default function Dashboard() {
         consumptionCount++;
       }
     });
+    // Count unique months for average
+    const uniqueMonths = new Set(filteredData.map((r) => r.fecha.slice(0, 7))).size;
     return {
       totalSpent: fmtNum(totalSpent),
       totalLiters: fmtNum(totalLiters, 1),
       totalKm,
       avgConsumption: consumptionCount > 0 ? fmtNum(totalConsumption / consumptionCount) : "—",
       avgCostPerKm: totalKm > 0 ? fmtNum(totalSpent / totalKm, 4) : "—",
+      totalNetoSinIva: fmtNum(totalNetoSinIva),
+      avgNetoSinIvaMes: uniqueMonths > 0 ? fmtNum(totalNetoSinIva / uniqueMonths) : "—",
     };
-  }, [filteredData]);
+  }, [filteredData, descuentos, iva]);
 
   // Chart: Neto sin IVA per month
   const chartData = useMemo(() => {
