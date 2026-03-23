@@ -95,6 +95,8 @@ export type Database = {
           created_at: string | null
           fecha: string
           id: number
+          incluir_iva: boolean
+          iva_porcentaje: number
           km_fin: number
           km_inicio: number
           litros: number
@@ -106,6 +108,8 @@ export type Database = {
           created_at?: string | null
           fecha: string
           id?: number
+          incluir_iva?: boolean
+          iva_porcentaje?: number
           km_fin: number
           km_inicio: number
           litros: number
@@ -117,6 +121,8 @@ export type Database = {
           created_at?: string | null
           fecha?: string
           id?: number
+          incluir_iva?: boolean
+          iva_porcentaje?: number
           km_fin?: number
           km_inicio?: number
           litros?: number
