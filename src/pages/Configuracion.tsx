@@ -4,12 +4,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Save, Upload, FileSpreadsheet } from "lucide-react";
+import { Plus, Pencil, Trash2, Save, Upload, FileSpreadsheet, Eye } from "lucide-react";
 import * as XLSX from "xlsx";
 
 interface Descuento {
@@ -33,6 +34,41 @@ interface ImportRow {
   km_fin: number;
 }
 
+// All toggleable columns in repostajes grid
+const ALL_COLUMNS: { id: string; label: string }[] = [
+  { id: "fecha", label: "Fecha" },
+  { id: "litros", label: "Litros" },
+  { id: "coste_litro", label: "Coste/Litro" },
+  { id: "km_inicio", label: "Km Inicio" },
+  { id: "km_fin", label: "Km Fin" },
+  { id: "descuentos", label: "Descuentos" },
+  { id: "iva_porcentaje", label: "IVA%" },
+  { id: "incluir_iva", label: "Incl. IVA" },
+  { id: "bruto", label: "Bruto" },
+  { id: "totalDescuentos", label: "Dto. Total" },
+  { id: "neto", label: "Neto" },
+  { id: "netoLitro", label: "Neto/L" },
+  { id: "totalIva", label: "Total IVA" },
+  { id: "netoSinIva", label: "Neto s/IVA" },
+  { id: "costeReal", label: "Coste Real" },
+  { id: "realLitro", label: "Real/L" },
+  { id: "kmTrip", label: "Km Trip" },
+  { id: "l100km", label: "L/100km" },
+  { id: "costeRealKm", label: "Coste Real/km" },
+];
+
+function getColumnVisibility(): Record<string, boolean> {
+  try {
+    const stored = localStorage.getItem("repostajes_col_visibility");
+    return stored ? JSON.parse(stored) : {};
+  } catch { return {}; }
+}
+
+function saveColumnVisibility(vis: Record<string, boolean>) {
+  localStorage.setItem("repostajes_col_visibility", JSON.stringify(vis));
+  window.dispatchEvent(new Event("colvisibility_changed"));
+}
+
 export default function Configuracion() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -53,6 +89,9 @@ export default function Configuracion() {
   const [importVehicleId, setImportVehicleId] = useState<string>("");
   const [importData, setImportData] = useState<ImportRow[]>([]);
   const [importing, setImporting] = useState(false);
+
+  // Column visibility
+  const [colVisibility, setColVisibility] = useState<Record<string, boolean>>(getColumnVisibility);
 
   useEffect(() => {
     if (!user) return;
@@ -82,10 +121,8 @@ export default function Configuracion() {
   const addDescuento = async () => {
     if (!user || !newNombre || !newPorcentaje) return;
     await supabase.from("descuentos").insert({
-      user_id: user.id,
-      nombre: newNombre,
-      porcentaje: Number(newPorcentaje),
-      orden_aplicacion: Number(newOrden),
+      user_id: user.id, nombre: newNombre,
+      porcentaje: Number(newPorcentaje), orden_aplicacion: Number(newOrden),
     });
     setNewNombre(""); setNewPorcentaje(""); setNewOrden("1");
     toast({ title: "Descuento añadido" });
@@ -95,9 +132,7 @@ export default function Configuracion() {
   const saveEdit = async () => {
     if (!editTarget) return;
     await supabase.from("descuentos").update({
-      nombre: editNombre,
-      porcentaje: Number(editPorcentaje),
-      orden_aplicacion: Number(editOrden),
+      nombre: editNombre, porcentaje: Number(editPorcentaje), orden_aplicacion: Number(editOrden),
     }).eq("id", editTarget.id);
     toast({ title: "Descuento actualizado" });
     setEditTarget(null);
@@ -113,28 +148,31 @@ export default function Configuracion() {
   };
 
   const openEdit = (d: Descuento) => {
-    setEditTarget(d);
-    setEditNombre(d.nombre);
-    setEditPorcentaje(String(d.porcentaje));
-    setEditOrden(String(d.orden_aplicacion));
+    setEditTarget(d); setEditNombre(d.nombre);
+    setEditPorcentaje(String(d.porcentaje)); setEditOrden(String(d.orden_aplicacion));
+  };
+
+  const toggleColumn = (colId: string) => {
+    const newVis = { ...colVisibility };
+    const current = newVis[colId] !== false; // default visible
+    newVis[colId] = !current;
+    setColVisibility(newVis);
+    saveColumnVisibility(newVis);
   };
 
   // ─── Import logic ──────────────────────────────────────────────────────────
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     const isCSV = file.name.toLowerCase().endsWith(".csv");
 
     reader.onload = (ev) => {
       try {
         let rows: ImportRow[] = [];
-
         if (isCSV) {
           const text = ev.target?.result as string;
           const lines = text.split(/\r?\n/).filter((l) => l.trim());
-          // Skip header
           for (let i = 1; i < lines.length; i++) {
             const parts = lines[i].split(/[;,]/);
             if (parts.length < 5) continue;
@@ -159,18 +197,13 @@ export default function Configuracion() {
             km_fin: Number(r["km_fin"] || r["Km Fin"] || r["km fin"] || 0),
           }));
         }
-
         setImportData(rows.filter((r) => r.fecha && r.litros > 0));
         toast({ title: `${rows.length} fila(s) leída(s) del archivo` });
       } catch {
         toast({ title: "Error al leer el archivo", variant: "destructive" });
       }
     };
-
-    if (isCSV) reader.readAsText(file);
-    else reader.readAsArrayBuffer(file);
-
-    // Reset file input
+    if (isCSV) reader.readAsText(file); else reader.readAsArrayBuffer(file);
     e.target.value = "";
   }, [toast]);
 
@@ -178,17 +211,13 @@ export default function Configuracion() {
     if (!user || !importVehicleId || importData.length === 0) return;
     setImporting(true);
     const vehicleId = Number(importVehicleId);
-
+    const defaultIva = Number(iva);
     const insertRows = importData.map((r) => ({
-      user_id: user.id,
-      vehiculo_id: vehicleId,
-      fecha: r.fecha,
-      litros: r.litros,
-      coste_litro: r.coste_litro,
-      km_inicio: r.km_inicio,
-      km_fin: r.km_fin,
+      user_id: user.id, vehiculo_id: vehicleId,
+      fecha: r.fecha, litros: r.litros, coste_litro: r.coste_litro,
+      km_inicio: r.km_inicio, km_fin: r.km_fin,
+      iva_porcentaje: defaultIva, incluir_iva: true,
     }));
-
     const { error } = await supabase.from("repostajes").insert(insertRows);
     if (error) {
       toast({ title: "Error al importar", description: error.message, variant: "destructive" });
@@ -233,9 +262,7 @@ export default function Configuracion() {
               </tr>
             </thead>
             <tbody>
-              {descuentos
-                .sort((a, b) => a.orden_aplicacion - b.orden_aplicacion)
-                .map((d) => (
+              {descuentos.sort((a, b) => a.orden_aplicacion - b.orden_aplicacion).map((d) => (
                 <tr key={d.id} className="border-b border-border last:border-0">
                   <td className="p-2">{d.nombre}</td>
                   <td className="p-2 text-right">{d.porcentaje}%</td>
@@ -244,9 +271,7 @@ export default function Configuracion() {
                       d.orden_aplicacion === 0
                         ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
                         : "bg-muted text-muted-foreground"
-                    }`}>
-                      {d.orden_aplicacion}
-                    </span>
+                    }`}>{d.orden_aplicacion}</span>
                   </td>
                   <td className="p-2 text-right space-x-1">
                     <Button variant="ghost" size="icon" onClick={() => openEdit(d)}><Pencil className="h-3 w-3" /></Button>
@@ -256,7 +281,6 @@ export default function Configuracion() {
               ))}
             </tbody>
           </table>
-
           <div className="flex gap-2 items-end pt-2 border-t border-border">
             <div className="flex-1 space-y-1">
               <Label className="text-xs">Nombre</Label>
@@ -271,6 +295,29 @@ export default function Configuracion() {
               <Input type="number" value={newOrden} onChange={(e) => setNewOrden(e.target.value)} placeholder="1" className="h-9" />
             </div>
             <Button size="sm" onClick={addDescuento} disabled={!newNombre || !newPorcentaje}><Plus className="h-4 w-4" /></Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ─── Visibilidad de columnas ─────────────────────────────────────── */}
+      <Card className="border-border shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Eye className="h-4 w-4" /> Columnas visibles (Repostajes)
+          </CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Activa o desactiva las columnas que quieres ver en la tabla de repostajes.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {ALL_COLUMNS.map((col) => (
+              <label key={col.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                <Switch checked={colVisibility[col.id] !== false}
+                  onCheckedChange={() => toggleColumn(col.id)} />
+                <span>{col.label}</span>
+              </label>
+            ))}
           </div>
         </CardContent>
       </Card>
@@ -290,36 +337,26 @@ export default function Configuracion() {
             <p>• Los decimales pueden usar punto o coma (se convierten automáticamente)</p>
             <p>• La fecha debe estar en formato <strong>AAAA-MM-DD</strong> (ej: 2025-06-15)</p>
             <p>• La primera fila debe contener los nombres de las columnas</p>
+            <p>• Se asignará el IVA por defecto ({iva}%) a cada fila importada</p>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label className="text-xs">Vehículo destino</Label>
             <Select value={importVehicleId} onValueChange={setImportVehicleId}>
-              <SelectTrigger className="h-9">
-                <SelectValue placeholder="Selecciona un vehículo" />
-              </SelectTrigger>
+              <SelectTrigger className="h-9"><SelectValue placeholder="Selecciona un vehículo" /></SelectTrigger>
               <SelectContent>
                 {vehicles.map((v) => (
-                  <SelectItem key={v.id} value={String(v.id)}>
-                    {v.matricula} — {v.modelo}
-                  </SelectItem>
+                  <SelectItem key={v.id} value={String(v.id)}>{v.matricula} — {v.modelo}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-
           <div className="space-y-2">
             <Label className="text-xs">Archivo CSV o Excel</Label>
-            <Input
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              onChange={handleFileChange}
-              className="h-9 text-sm file:mr-3 file:text-xs"
-              disabled={!importVehicleId}
-            />
+            <Input type="file" accept=".csv,.xlsx,.xls" onChange={handleFileChange}
+              className="h-9 text-sm file:mr-3 file:text-xs" disabled={!importVehicleId} />
           </div>
-
           {importData.length > 0 && (
             <div className="space-y-3">
               <p className="text-sm font-medium">{importData.length} fila(s) listas para importar</p>
@@ -347,18 +384,14 @@ export default function Configuracion() {
                   </tbody>
                 </table>
                 {importData.length > 20 && (
-                  <p className="text-xs text-muted-foreground text-center py-1">
-                    … y {importData.length - 20} filas más
-                  </p>
+                  <p className="text-xs text-muted-foreground text-center py-1">… y {importData.length - 20} filas más</p>
                 )}
               </div>
               <div className="flex gap-2">
                 <Button size="sm" onClick={executeImport} disabled={importing}>
                   <Upload className="h-4 w-4 mr-1" /> {importing ? "Importando..." : "Importar"}
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setImportData([])}>
-                  Cancelar
-                </Button>
+                <Button size="sm" variant="outline" onClick={() => setImportData([])}>Cancelar</Button>
               </div>
             </div>
           )}
