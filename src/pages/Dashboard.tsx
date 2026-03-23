@@ -20,6 +20,8 @@ interface Repostaje {
   km_inicio: number;
   km_fin: number;
   descuento_ids: number[];
+  iva_porcentaje: number;
+  incluir_iva: boolean;
 }
 
 interface Descuento {
@@ -30,9 +32,7 @@ interface Descuento {
 }
 
 function calcDescuentos(
-  bruto: number,
-  selectedIds: number[],
-  descuentos: Descuento[]
+  bruto: number, selectedIds: number[], descuentos: Descuento[]
 ): { netoPagado: number; netoParaIva: number; totalDescuento: number } {
   const selected = descuentos.filter((d) => selectedIds.includes(d.id));
   if (selected.length === 0) return { netoPagado: bruto, netoParaIva: bruto, totalDescuento: 0 };
@@ -54,15 +54,12 @@ export default function Dashboard() {
   const { activeVehicleId } = useVehicleStore();
   const [data, setData] = useState<Repostaje[]>([]);
   const [descuentos, setDescuentos] = useState<Descuento[]>([]);
-  const [iva, setIva] = useState(21);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedYear, setSelectedYear] = useState("all");
 
   useEffect(() => {
     if (!user) return;
-    supabase.from("configuracion").select("iva_porcentaje").eq("user_id", user.id).maybeSingle()
-      .then(({ data }) => { if (data) setIva(Number(data.iva_porcentaje)); });
     supabase.from("descuentos").select("*").eq("user_id", user.id)
       .then(({ data }) => setDescuentos((data as any) || []));
   }, [user]);
@@ -70,11 +67,9 @@ export default function Dashboard() {
   useEffect(() => {
     if (!user || !activeVehicleId) return;
     const fetchData = async () => {
-      let query = supabase
-        .from("repostajes")
+      let query = supabase.from("repostajes")
         .select("*, repostaje_descuentos(descuento_id)")
-        .eq("user_id", user.id)
-        .eq("vehiculo_id", activeVehicleId)
+        .eq("user_id", user.id).eq("vehiculo_id", activeVehicleId)
         .order("fecha", { ascending: true });
       if (startDate) query = query.gte("fecha", startDate);
       if (endDate) query = query.lte("fecha", endDate);
@@ -89,13 +84,10 @@ export default function Dashboard() {
     fetchData();
   }, [user, activeVehicleId, startDate, endDate]);
 
-  // Available years from data
   const availableYears = useMemo(() => {
-    const years = [...new Set(data.map((r) => r.fecha.slice(0, 4)))].sort();
-    return years;
+    return [...new Set(data.map((r) => r.fecha.slice(0, 4)))].sort();
   }, [data]);
 
-  // Filtered data by year
   const filteredData = useMemo(() => {
     if (selectedYear === "all") return data;
     return data.filter((r) => r.fecha.startsWith(selectedYear));
@@ -104,7 +96,8 @@ export default function Dashboard() {
   const calcNetoSinIva = (r: Repostaje) => {
     const bruto = r.litros * r.coste_litro;
     const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-    const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
+    const ivaRow = r.iva_porcentaje || 21;
+    const totalIva = netoParaIva - netoParaIva / (1 + ivaRow / 100);
     return netoPagado - totalIva;
   };
 
@@ -119,12 +112,8 @@ export default function Dashboard() {
       totalNetoSinIva += calcNetoSinIva(r);
       const km = r.km_fin - r.km_inicio;
       totalKm += km;
-      if (km > 0) {
-        totalConsumption += (r.litros / km) * 100;
-        consumptionCount++;
-      }
+      if (km > 0) { totalConsumption += (r.litros / km) * 100; consumptionCount++; }
     });
-    // Count unique months for average
     const uniqueMonths = new Set(filteredData.map((r) => r.fecha.slice(0, 7))).size;
     return {
       totalSpent: fmtNum(totalSpent),
@@ -135,9 +124,8 @@ export default function Dashboard() {
       totalNetoSinIva: fmtNum(totalNetoSinIva),
       avgNetoSinIvaMes: uniqueMonths > 0 ? fmtNum(totalNetoSinIva / uniqueMonths) : "—",
     };
-  }, [filteredData, descuentos, iva]);
+  }, [filteredData, descuentos]);
 
-  // Chart: Neto sin IVA per month
   const chartData = useMemo(() => {
     const months: Record<string, number> = {};
     filteredData.forEach((r) => {
@@ -146,17 +134,12 @@ export default function Dashboard() {
       months[m] += calcNetoSinIva(r);
     });
     return Object.entries(months).map(([month, netoSinIva]) => ({
-      month,
-      netoSinIva: Number(netoSinIva.toFixed(2)),
+      month, netoSinIva: Number(netoSinIva.toFixed(2)),
     }));
-  }, [filteredData, descuentos, iva]);
+  }, [filteredData, descuentos]);
 
-  // Price per liter evolution
   const priceChartData = useMemo(() => {
-    return filteredData.map((r) => ({
-      fecha: r.fecha,
-      precioLitro: r.coste_litro,
-    }));
+    return filteredData.map((r) => ({ fecha: r.fecha, precioLitro: r.coste_litro }));
   }, [filteredData]);
 
   const monthlyTable = useMemo(() => {
@@ -166,39 +149,29 @@ export default function Dashboard() {
       if (!months[m]) months[m] = [];
       months[m].push(r);
     });
-    const rows = Object.entries(months).map(([month, rows]) => {
+    return Object.entries(months).map(([month, rows]) => {
       const totalLiters = rows.reduce((s, r) => s + r.litros, 0);
       const totalSpent = rows.reduce((s, r) => s + r.litros * r.coste_litro, 0);
       const totalKm = rows.reduce((s, r) => s + (r.km_fin - r.km_inicio), 0);
       const totalNetoSinIva = rows.reduce((s, r) => s + calcNetoSinIva(r), 0);
       return {
-        month,
-        totalLiters,
-        totalSpent,
-        totalNetoSinIva,
+        month, totalLiters, totalSpent, totalNetoSinIva,
         avgCostLiter: totalLiters > 0 ? totalSpent / totalLiters : 0,
         totalKm,
         avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0,
         avgCostKm: totalKm > 0 ? totalSpent / totalKm : 0,
       };
     });
-    return rows;
-  }, [filteredData, descuentos, iva]);
+  }, [filteredData, descuentos]);
 
-  // Totals row
   const totals = useMemo(() => {
     if (monthlyTable.length === 0) return null;
     const totalLiters = monthlyTable.reduce((s, r) => s + r.totalLiters, 0);
     const totalSpent = monthlyTable.reduce((s, r) => s + r.totalSpent, 0);
     const totalKm = monthlyTable.reduce((s, r) => s + r.totalKm, 0);
     const totalNetoSinIva = monthlyTable.reduce((s, r) => s + r.totalNetoSinIva, 0);
-    return {
-      totalLiters,
-      totalSpent,
-      totalKm,
-      totalNetoSinIva,
-      avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0,
-    };
+    return { totalLiters, totalSpent, totalKm, totalNetoSinIva,
+      avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0 };
   }, [monthlyTable]);
 
   if (!activeVehicleId) {
@@ -219,14 +192,10 @@ export default function Dashboard() {
           <div>
             <Label className="text-xs text-muted-foreground">Año</Label>
             <Select value={selectedYear} onValueChange={setSelectedYear}>
-              <SelectTrigger className="h-9 w-28">
-                <SelectValue />
-              </SelectTrigger>
+              <SelectTrigger className="h-9 w-28"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>
-                {availableYears.map((y) => (
-                  <SelectItem key={y} value={y}>{y}</SelectItem>
-                ))}
+                {availableYears.map((y) => <SelectItem key={y} value={y}>{y}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -267,9 +236,7 @@ export default function Dashboard() {
 
       <div className="grid lg:grid-cols-2 gap-6">
         <Card className="border-border shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">Neto sin IVA por mes (€)</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="text-base font-semibold">Neto sin IVA por mes (€)</CardTitle></CardHeader>
           <CardContent>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -277,10 +244,8 @@ export default function Dashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
                   <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip
-                    contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
-                    formatter={(value: number) => [`${fmtNum(value)} €`, "Neto s/IVA"]}
-                  />
+                  <Tooltip contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
+                    formatter={(value: number) => [`${fmtNum(value)} €`, "Neto s/IVA"]} />
                   <Bar dataKey="netoSinIva" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -289,9 +254,7 @@ export default function Dashboard() {
         </Card>
 
         <Card className="border-border shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">Evolución precio/litro (€/L)</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="text-base font-semibold">Evolución precio/litro (€/L)</CardTitle></CardHeader>
           <CardContent>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -299,10 +262,8 @@ export default function Dashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="fecha" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                   <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" domain={["auto", "auto"]} />
-                  <Tooltip
-                    contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
-                    formatter={(value: number) => [`${fmtNum(value, 3)} €/L`, "Precio"]}
-                  />
+                  <Tooltip contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
+                    formatter={(value: number) => [`${fmtNum(value, 3)} €/L`, "Precio"]} />
                   <Line type="monotone" dataKey="precioLitro" stroke="hsl(var(--primary))" strokeWidth={2}
                     dot={{ r: 3, fill: "hsl(var(--primary))" }} activeDot={{ r: 5 }} />
                 </LineChart>
@@ -313,9 +274,7 @@ export default function Dashboard() {
       </div>
 
       <Card className="border-border shadow-sm overflow-auto">
-        <CardHeader>
-          <CardTitle className="text-base font-semibold">Resumen mensual</CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle className="text-base font-semibold">Resumen mensual</CardTitle></CardHeader>
         <CardContent className="p-0">
           <table className="w-full text-xs">
             <thead>

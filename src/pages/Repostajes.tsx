@@ -6,6 +6,7 @@ import { useVehicleStore } from "@/stores/vehicleStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
@@ -29,6 +30,8 @@ interface Repostaje {
   km_inicio: number;
   km_fin: number;
   descuento_ids: number[];
+  iva_porcentaje: number;
+  incluir_iva: boolean;
 }
 
 interface Descuento {
@@ -39,10 +42,6 @@ interface Descuento {
 }
 
 // ─── Lógica de descuentos en cascada ─────────────────────────────────────────
-// Descuentos con el mismo orden se aplican simultáneamente sobre la misma base.
-// Ordenes diferentes se aplican en cascada (secuencialmente).
-// Orden 0 = se aplica sobre el total tras descuentos anteriores pero NO afecta al cálculo de IVA.
-// Retorna { netoPagado, netoParaIva } donde netoParaIva es el total antes de descuentos orden 0.
 function calcDescuentos(
   bruto: number,
   selectedIds: number[],
@@ -50,55 +49,44 @@ function calcDescuentos(
 ): { netoPagado: number; netoParaIva: number; totalDescuento: number } {
   const selected = descuentos.filter((d) => selectedIds.includes(d.id));
   if (selected.length === 0) return { netoPagado: bruto, netoParaIva: bruto, totalDescuento: 0 };
-
-  // Agrupar por orden
   const ordenes = [...new Set(selected.map((d) => d.orden_aplicacion))].sort((a, b) => a === 0 ? 1 : b === 0 ? -1 : a - b);
-  // Orden 0 siempre va al final
-
   let base = bruto;
-  let netoParaIva = bruto; // se congela antes de aplicar orden 0
-
+  let netoParaIva = bruto;
   for (const orden of ordenes) {
-    if (orden === 0) {
-      // Congelar netoParaIva antes de aplicar orden 0
-      netoParaIva = base;
-    }
+    if (orden === 0) netoParaIva = base;
     const grupoDescuentos = selected.filter((d) => d.orden_aplicacion === orden);
     const sumPct = grupoDescuentos.reduce((s, d) => s + d.porcentaje, 0);
     base = base - (base * sumPct) / 100;
   }
+  if (!selected.some((d) => d.orden_aplicacion === 0)) netoParaIva = base;
+  return { netoPagado: base, netoParaIva, totalDescuento: bruto - base };
+}
 
-  // Si no hubo orden 0, netoParaIva = netoPagado
-  if (!selected.some((d) => d.orden_aplicacion === 0)) {
-    netoParaIva = base;
-  }
-
-  return {
-    netoPagado: base,
-    netoParaIva,
-    totalDescuento: bruto - base,
-  };
+// ─── Cálculo de coste real ───────────────────────────────────────────────────
+function calcCosteReal(r: Repostaje, descuentos: Descuento[]) {
+  const bruto = r.litros * r.coste_litro;
+  const { netoPagado, netoParaIva, totalDescuento } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+  const ivaRow = r.iva_porcentaje;
+  const totalIva = netoParaIva - netoParaIva / (1 + ivaRow / 100);
+  const netoSinIva = netoPagado - totalIva;
+  const costeReal = r.incluir_iva ? netoPagado : netoSinIva;
+  const km = r.km_fin - r.km_inicio;
+  return { bruto, netoPagado, netoParaIva, totalDescuento, totalIva, netoSinIva, costeReal, km };
 }
 
 // ─── Navegación entre celdas editables ──────────────────────────────────────
 function navigateCell(currentKey: string, direction: "next" | "prev" | "down" | "up") {
-  const all = Array.from(
-    document.querySelectorAll<HTMLElement>('[data-editable="true"]')
-  );
+  const all = Array.from(document.querySelectorAll<HTMLElement>('[data-editable="true"]'));
   const currentIndex = all.findIndex((el) => el.dataset.cellKey === currentKey);
   if (currentIndex === -1) return;
-
   let targetIndex: number;
   if (direction === "down" || direction === "up") {
     const [, colStr] = currentKey.split("-");
     const col = Number(colStr);
     if (direction === "down") {
-      const nextSameCol = all.findIndex(
-        (el, i) => i > currentIndex && Number(el.dataset.cellKey?.split("-")[1]) === col
-      );
+      const nextSameCol = all.findIndex((el, i) => i > currentIndex && Number(el.dataset.cellKey?.split("-")[1]) === col);
       targetIndex = nextSameCol !== -1 ? nextSameCol : currentIndex;
     } else {
-      // up: find previous element with same column
       let found = -1;
       for (let i = currentIndex - 1; i >= 0; i--) {
         if (Number(all[i].dataset.cellKey?.split("-")[1]) === col) { found = i; break; }
@@ -108,25 +96,13 @@ function navigateCell(currentKey: string, direction: "next" | "prev" | "down" | 
   } else {
     targetIndex = direction === "next" ? currentIndex + 1 : currentIndex - 1;
   }
-
   const target = all[targetIndex];
-  if (target) {
-    target.focus();
-    target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-  }
+  if (target) { target.focus(); target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); }
 }
 
 // ─── Celda editable ──────────────────────────────────────────────────────────
-function EditableCell({
-  value: initialValue,
-  type = "text",
-  cellKey,
-  onSave,
-}: {
-  value: string | number;
-  type?: string;
-  cellKey: string;
-  onSave: (val: string) => void;
+function EditableCell({ value: initialValue, type = "text", cellKey, onSave }: {
+  value: string | number; type?: string; cellKey: string; onSave: (val: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(String(initialValue));
@@ -137,64 +113,36 @@ function EditableCell({
   useEffect(() => { if (editing) inputRef.current?.focus(); }, [editing]);
 
   const commitAndNavigate = (dir: "next" | "prev" | "down" | "up") => {
-    setEditing(false);
-    onSave(value);
+    setEditing(false); onSave(value);
     setTimeout(() => navigateCell(cellKey, dir), 30);
   };
 
   if (!editing) {
     return (
-      <div
-        ref={wrapperRef}
-        data-editable="true"
-        data-cell-key={cellKey}
-        tabIndex={0}
+      <div ref={wrapperRef} data-editable="true" data-cell-key={cellKey} tabIndex={0}
         className="cursor-pointer px-2 py-1.5 min-h-[30px] hover:bg-primary/10 rounded
                    focus:outline-none focus:ring-2 focus:ring-primary/40 focus:bg-primary/5
                    transition-colors duration-100 text-sm tabular-nums"
         onDoubleClick={() => setEditing(true)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === "F2") {
-            e.preventDefault();
-            setEditing(true);
-          }
-          if (e.key === "ArrowRight") {
-            e.preventDefault();
-            navigateCell(cellKey, "next");
-          }
-          if (e.key === "ArrowLeft") {
-            e.preventDefault();
-            navigateCell(cellKey, "prev");
-          }
-          if (e.key === "ArrowDown") {
-            e.preventDefault();
-            navigateCell(cellKey, "down");
-          }
-          if (e.key === "ArrowUp") {
-            e.preventDefault();
-            navigateCell(cellKey, "up");
-          }
+          if (e.key === "Enter" || e.key === "F2") { e.preventDefault(); setEditing(true); }
+          if (e.key === "ArrowRight") { e.preventDefault(); navigateCell(cellKey, "next"); }
+          if (e.key === "ArrowLeft") { e.preventDefault(); navigateCell(cellKey, "prev"); }
+          if (e.key === "ArrowDown") { e.preventDefault(); navigateCell(cellKey, "down"); }
+          if (e.key === "ArrowUp") { e.preventDefault(); navigateCell(cellKey, "up"); }
         }}
-      >
-        {value}
-      </div>
+      >{value}</div>
     );
   }
 
   return (
-    <Input
-      ref={inputRef}
-      type={type}
-      value={value}
+    <Input ref={inputRef} type={type} value={value}
       onChange={(e) => setValue(e.target.value)}
       onBlur={() => { setEditing(false); onSave(value); }}
       onKeyDown={(e) => {
         if (e.key === "Enter") { e.preventDefault(); commitAndNavigate("down"); }
         if (e.key === "Escape") { setEditing(false); setValue(String(initialValue)); }
-        if (e.key === "Tab") {
-          e.preventDefault();
-          commitAndNavigate(e.shiftKey ? "prev" : "next");
-        }
+        if (e.key === "Tab") { e.preventDefault(); commitAndNavigate(e.shiftKey ? "prev" : "next"); }
         if (e.key === "ArrowDown") { e.preventDefault(); commitAndNavigate("down"); }
         if (e.key === "ArrowUp") { e.preventDefault(); commitAndNavigate("up"); }
       }}
@@ -205,65 +153,45 @@ function EditableCell({
 }
 
 // ─── Celda de descuentos ─────────────────────────────────────────────────────
-function DiscountCell({
-  selectedIds,
-  descuentos,
-  onSave,
-}: {
-  selectedIds: number[];
-  descuentos: Descuento[];
-  onSave: (ids: number[]) => void;
+function DiscountCell({ selectedIds, descuentos, onSave }: {
+  selectedIds: number[]; descuentos: Descuento[]; onSave: (ids: number[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<number[]>(selectedIds);
-
   useEffect(() => { setSelected(selectedIds); }, [selectedIds]);
-
-  const display = descuentos
-    .filter((d) => selected.includes(d.id))
+  const display = descuentos.filter((d) => selected.includes(d.id))
     .sort((a, b) => a.orden_aplicacion - b.orden_aplicacion)
-    .map((d) => `${d.nombre} ${d.porcentaje}%`)
-    .join(", ") || "—";
+    .map((d) => `${d.nombre} ${d.porcentaje}%`).join(", ") || "—";
 
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) onSave(selected); }}>
       <PopoverTrigger asChild>
-        <div
-          className="cursor-pointer px-2 py-1.5 min-h-[30px] hover:bg-primary/10 rounded
-                     transition-colors duration-100 text-sm truncate max-w-[200px]"
-          onDoubleClick={() => setOpen(true)}
-        >
-          {display}
-        </div>
+        <div className="cursor-pointer px-2 py-1.5 min-h-[30px] hover:bg-primary/10 rounded transition-colors duration-100 text-sm truncate max-w-[200px]"
+          onDoubleClick={() => setOpen(true)}>{display}</div>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-2 pointer-events-auto" align="start">
         <div className="space-y-1">
-          {descuentos
-            .sort((a, b) => a.orden_aplicacion - b.orden_aplicacion)
-            .map((d) => (
-            <label
-              key={d.id}
-              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-muted cursor-pointer"
-            >
-              <Checkbox
-                checked={selected.includes(d.id)}
-                onCheckedChange={(checked) =>
-                  setSelected((prev) =>
-                    checked ? [...prev, d.id] : prev.filter((id) => id !== d.id)
-                  )
-                }
-              />
+          {descuentos.sort((a, b) => a.orden_aplicacion - b.orden_aplicacion).map((d) => (
+            <label key={d.id} className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-muted cursor-pointer">
+              <Checkbox checked={selected.includes(d.id)}
+                onCheckedChange={(checked) => setSelected((prev) => checked ? [...prev, d.id] : prev.filter((id) => id !== d.id))} />
               <span className="flex-1">{d.nombre} ({d.porcentaje}%)</span>
               <span className="text-xs text-muted-foreground">Ord. {d.orden_aplicacion}</span>
             </label>
           ))}
-          {descuentos.length === 0 && (
-            <p className="text-xs text-muted-foreground p-2">Sin descuentos configurados</p>
-          )}
+          {descuentos.length === 0 && <p className="text-xs text-muted-foreground p-2">Sin descuentos configurados</p>}
         </div>
       </PopoverContent>
     </Popover>
   );
+}
+
+// ─── Column visibility ───────────────────────────────────────────────────────
+function getColumnVisibility(): Record<string, boolean> {
+  try {
+    const stored = localStorage.getItem("repostajes_col_visibility");
+    return stored ? JSON.parse(stored) : {};
+  } catch { return {}; }
 }
 
 // ─── Página principal ────────────────────────────────────────────────────────
@@ -273,12 +201,21 @@ export default function Repostajes() {
   const { activeVehicleId } = useVehicleStore();
   const [data, setData] = useState<Repostaje[]>([]);
   const [descuentos, setDescuentos] = useState<Descuento[]>([]);
-  const [iva, setIva] = useState(21);
+  const [defaultIva, setDefaultIva] = useState(21);
   const [sorting, setSorting] = useState<SortingState>([{ id: "fecha", desc: true }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
   const [flashRow, setFlashRow] = useState<number | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(getColumnVisibility);
+
+  // Listen for visibility changes from Configuracion
+  useEffect(() => {
+    const handler = () => setColumnVisibility(getColumnVisibility());
+    window.addEventListener("storage", handler);
+    window.addEventListener("colvisibility_changed", handler);
+    return () => { window.removeEventListener("storage", handler); window.removeEventListener("colvisibility_changed", handler); };
+  }, []);
 
   const fetchData = useCallback(async () => {
     if (!user || !activeVehicleId) return;
@@ -298,33 +235,21 @@ export default function Repostajes() {
 
   useEffect(() => {
     if (!user) return;
-    supabase
-      .from("descuentos")
-      .select("*")
-      .eq("user_id", user.id)
+    supabase.from("descuentos").select("*").eq("user_id", user.id)
       .then(({ data }) => setDescuentos((data as any) || []));
-    supabase
-      .from("configuracion")
-      .select("iva_porcentaje")
-      .eq("user_id", user.id)
-      .maybeSingle()
-      .then(({ data }) => { if (data) setIva(Number(data.iva_porcentaje)); });
+    supabase.from("configuracion").select("iva_porcentaje").eq("user_id", user.id).maybeSingle()
+      .then(({ data }) => { if (data) setDefaultIva(Number(data.iva_porcentaje)); });
   }, [user]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const saveRow = async (row: Repostaje) => {
     const { descuento_ids, ...rest } = row;
-    await supabase
-      .from("repostajes")
-      .update({
-        fecha: rest.fecha,
-        litros: rest.litros,
-        coste_litro: rest.coste_litro,
-        km_inicio: rest.km_inicio,
-        km_fin: rest.km_fin,
-      })
-      .eq("id", rest.id);
+    await supabase.from("repostajes").update({
+      fecha: rest.fecha, litros: rest.litros, coste_litro: rest.coste_litro,
+      km_inicio: rest.km_inicio, km_fin: rest.km_fin,
+      iva_porcentaje: rest.iva_porcentaje, incluir_iva: rest.incluir_iva,
+    }).eq("id", rest.id);
 
     await supabase.from("repostaje_descuentos").delete().eq("repostaje_id", rest.id);
     if (descuento_ids.length > 0) {
@@ -332,7 +257,6 @@ export default function Repostajes() {
         descuento_ids.map((did) => ({ repostaje_id: rest.id, descuento_id: did }))
       );
     }
-
     setFlashRow(rest.id);
     setTimeout(() => setFlashRow(null), 600);
   };
@@ -348,26 +272,17 @@ export default function Repostajes() {
 
   const addRow = async () => {
     if (!user || !activeVehicleId) return;
-    const { data: newRow } = await supabase
-      .from("repostajes")
-      .insert({
-        user_id: user.id,
-        vehiculo_id: activeVehicleId,
-        fecha: new Date().toISOString().slice(0, 10),
-        litros: 0,
-        coste_litro: 0,
-        km_inicio: 0,
-        km_fin: 0,
-      })
-      .select()
-      .single();
+    const { data: newRow } = await supabase.from("repostajes").insert({
+      user_id: user.id, vehiculo_id: activeVehicleId,
+      fecha: new Date().toISOString().slice(0, 10),
+      litros: 0, coste_litro: 0, km_inicio: 0, km_fin: 0,
+      iva_porcentaje: defaultIva, incluir_iva: true,
+    }).select().single();
     if (newRow) fetchData();
   };
 
   const deleteSelected = async () => {
-    const ids = Object.keys(rowSelection)
-      .map((idx) => data[Number(idx)]?.id)
-      .filter(Boolean);
+    const ids = Object.keys(rowSelection).map((idx) => data[Number(idx)]?.id).filter(Boolean);
     if (ids.length === 0) return;
     await supabase.from("repostajes").delete().in("id", ids);
     setRowSelection({});
@@ -379,33 +294,21 @@ export default function Repostajes() {
   const exportCsv = () => {
     const rows = table.getFilteredRowModel().rows;
     const headers = [
-      "Fecha", "Litros", "Coste/Litro", "Km Inicio", "Km Fin",
-      "Bruto", "Total Descuentos", "Neto", "Total IVA", "Neto s/IVA",
-      "Neto/Litro", "Km Trip", "L/100km", "Final/L", "Coste/km s/IVA",
+      "Fecha", "Litros", "Coste/Litro", "IVA%", "Incl.IVA", "Km Inicio", "Km Fin",
+      "Bruto", "Dto.Total", "Neto", "Total IVA", "Neto s/IVA",
+      "Coste Real", "Real/L", "Km Trip", "L/100km", "Coste Real/km",
     ];
     const csvRows = rows.map((r) => {
       const d = r.original;
-      const bruto = d.litros * d.coste_litro;
-      const { netoPagado, netoParaIva, totalDescuento } = calcDescuentos(bruto, d.descuento_ids, descuentos);
-      const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
-      const netoSinIva = netoPagado - totalIva;
-      const kmTrip = d.km_fin - d.km_inicio;
+      const c = calcCosteReal(d, descuentos);
       return [
-        d.fecha,
-        d.litros,
-        d.coste_litro,
-        d.km_inicio,
-        d.km_fin,
-        bruto.toFixed(2),
-        totalDescuento.toFixed(2),
-        netoPagado.toFixed(2),
-        totalIva.toFixed(2),
-        netoSinIva.toFixed(2),
-        d.litros > 0 ? (netoPagado / d.litros).toFixed(4) : "",
-        kmTrip,
-        kmTrip > 0 ? ((d.litros / kmTrip) * 100).toFixed(2) : "",
-        d.litros > 0 ? (netoSinIva / d.litros).toFixed(4) : "",
-        kmTrip > 0 ? (netoSinIva / kmTrip).toFixed(4) : "",
+        d.fecha, d.litros, d.coste_litro, d.iva_porcentaje, d.incluir_iva ? "Sí" : "No",
+        d.km_inicio, d.km_fin,
+        c.bruto.toFixed(2), c.totalDescuento.toFixed(2), c.netoPagado.toFixed(2),
+        c.totalIva.toFixed(2), c.netoSinIva.toFixed(2), c.costeReal.toFixed(2),
+        d.litros > 0 ? (c.costeReal / d.litros).toFixed(4) : "",
+        c.km, c.km > 0 ? ((d.litros / c.km) * 100).toFixed(2) : "",
+        c.km > 0 ? (c.costeReal / c.km).toFixed(4) : "",
       ].join(",");
     });
     const csv = [headers.join(","), ...csvRows].join("\n");
@@ -419,51 +322,31 @@ export default function Repostajes() {
   // ─── Columnas ───────────────────────────────────────────────────────────────
   const columns = useMemo<ColumnDef<Repostaje>[]>(() => {
     const editableCol = (
-      accessorKey: keyof Repostaje,
-      header: string,
-      type: string,
-      colIndex: number
+      accessorKey: keyof Repostaje, header: string, type: string, colIndex: number
     ): ColumnDef<Repostaje> => ({
-      accessorKey,
-      header,
+      accessorKey, header,
       cell: ({ row }) => (
-        <EditableCell
-          value={row.original[accessorKey] as string | number}
-          type={type}
+        <EditableCell value={row.original[accessorKey] as string | number} type={type}
           cellKey={`${row.original.id}-${colIndex}`}
-          onSave={(v) =>
-            updateField(row.original.id, accessorKey, type === "number" ? Number(v) : v)
-          }
-        />
+          onSave={(v) => updateField(row.original.id, accessorKey, type === "number" ? Number(v) : v)} />
       ),
     });
 
     const calcCol = (id: string, header: string, fn: (r: Repostaje) => string): ColumnDef<Repostaje> => ({
-      id,
-      header,
-      accessorFn: fn,
-      enableColumnFilter: false,
+      id, header, accessorFn: fn, enableColumnFilter: false,
     });
 
     return [
-      // Checkbox
       {
         id: "select",
         header: ({ table }) => (
-          <Checkbox
-            checked={table.getIsAllPageRowsSelected()}
-            onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)}
-          />
+          <Checkbox checked={table.getIsAllPageRowsSelected()}
+            onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)} />
         ),
         cell: ({ row }) => (
-          <Checkbox
-            checked={row.getIsSelected()}
-            onCheckedChange={(v) => row.toggleSelected(!!v)}
-          />
+          <Checkbox checked={row.getIsSelected()} onCheckedChange={(v) => row.toggleSelected(!!v)} />
         ),
-        size: 40,
-        enableSorting: false,
-        enableColumnFilter: false,
+        size: 40, enableSorting: false, enableColumnFilter: false,
       },
       editableCol("fecha", "Fecha", "date", 1),
       editableCol("litros", "Litros", "number", 2),
@@ -472,74 +355,60 @@ export default function Repostajes() {
       editableCol("km_fin", "Km Fin", "number", 5),
       // Descuentos
       {
-        id: "descuentos",
-        header: "Descuentos",
+        id: "descuentos", header: "Descuentos",
         cell: ({ row }) => (
-          <DiscountCell
-            selectedIds={row.original.descuento_ids}
-            descuentos={descuentos}
-            onSave={(ids) => updateField(row.original.id, "descuento_ids" as any, ids)}
-          />
+          <DiscountCell selectedIds={row.original.descuento_ids} descuentos={descuentos}
+            onSave={(ids) => updateField(row.original.id, "descuento_ids" as any, ids)} />
         ),
         enableSorting: false,
       },
-      // Columnas calculadas
+      // IVA editable por línea
+      editableCol("iva_porcentaje", "IVA%", "number", 7),
+      // Incluir IVA switch
+      {
+        id: "incluir_iva", header: "Incl.IVA",
+        cell: ({ row }) => (
+          <div className="flex justify-center">
+            <Switch checked={row.original.incluir_iva}
+              onCheckedChange={(v) => updateField(row.original.id, "incluir_iva", v)} />
+          </div>
+        ),
+        enableSorting: false, enableColumnFilter: false,
+      },
+      // Calculated
       calcCol("bruto", "Bruto", (r) => fmtNum(r.litros * r.coste_litro)),
       calcCol("totalDescuentos", "Dto. Total", (r) => {
-        const bruto = r.litros * r.coste_litro;
-        return fmtNum(calcDescuentos(bruto, r.descuento_ids, descuentos).totalDescuento);
+        const c = calcCosteReal(r, descuentos);
+        return fmtNum(c.totalDescuento);
       }),
-      calcCol("neto", "Neto", (r) => {
-        const bruto = r.litros * r.coste_litro;
-        return fmtNum(calcDescuentos(bruto, r.descuento_ids, descuentos).netoPagado);
-      }),
-      calcCol("netoLitro", "Neto/L", (r) => {
-        const bruto = r.litros * r.coste_litro;
-        const { netoPagado } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        return r.litros > 0 ? fmtNum(netoPagado / r.litros, 4) : "—";
-      }),
-      calcCol("totalIva", "Total IVA", (r) => {
-        const bruto = r.litros * r.coste_litro;
-        const { netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
-        return fmtNum(totalIva);
-      }),
-      calcCol("netoSinIva", "Neto s/IVA", (r) => {
-        const bruto = r.litros * r.coste_litro;
-        const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
-        return fmtNum(netoPagado - totalIva);
+      calcCol("neto", "Neto", (r) => fmtNum(calcCosteReal(r, descuentos).netoPagado)),
+      calcCol("netoLitro", "Neto/L", (r) => r.litros > 0 ? fmtNum(calcCosteReal(r, descuentos).netoPagado / r.litros, 4) : "—"),
+      calcCol("totalIva", "Total IVA", (r) => fmtNum(calcCosteReal(r, descuentos).totalIva)),
+      calcCol("netoSinIva", "Neto s/IVA", (r) => fmtNum(calcCosteReal(r, descuentos).netoSinIva)),
+      calcCol("costeReal", "Coste Real", (r) => fmtNum(calcCosteReal(r, descuentos).costeReal)),
+      calcCol("realLitro", "Real/L", (r) => {
+        const c = calcCosteReal(r, descuentos);
+        return r.litros > 0 ? fmtNum(c.costeReal / r.litros, 4) : "—";
       }),
       calcCol("kmTrip", "Km Trip", (r) => String(r.km_fin - r.km_inicio)),
       calcCol("l100km", "L/100km", (r) => {
         const km = r.km_fin - r.km_inicio;
         return km > 0 ? fmtNum((r.litros / km) * 100) : "—";
       }),
-      calcCol("finalLitro", "Final/L", (r) => {
-        const bruto = r.litros * r.coste_litro;
-        const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
-        const netoSinIva = netoPagado - totalIva;
-        return r.litros > 0 ? fmtNum(netoSinIva / r.litros, 4) : "—";
-      }),
-      calcCol("costeKm", "Coste/km s/IVA", (r) => {
-        const km = r.km_fin - r.km_inicio;
-        const bruto = r.litros * r.coste_litro;
-        const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-        const totalIva = netoParaIva - netoParaIva / (1 + iva / 100);
-        const netoSinIva = netoPagado - totalIva;
-        return km > 0 ? fmtNum(netoSinIva / km, 4) : "—";
+      calcCol("costeRealKm", "Coste Real/km", (r) => {
+        const c = calcCosteReal(r, descuentos);
+        return c.km > 0 ? fmtNum(c.costeReal / c.km, 4) : "—";
       }),
     ];
-  }, [descuentos, iva]);
+  }, [descuentos, defaultIva]);
 
   const table = useReactTable({
-    data,
-    columns,
-    state: { sorting, columnFilters, rowSelection },
+    data, columns,
+    state: { sorting, columnFilters, rowSelection, columnVisibility },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -547,7 +416,7 @@ export default function Repostajes() {
   });
 
   const selectedCount = Object.keys(rowSelection).length;
-  const calculatedColIds = ["bruto","totalDescuentos","neto","netoLitro","totalIva","netoSinIva","kmTrip","l100km","finalLitro","costeKm"];
+  const calculatedColIds = ["bruto","totalDescuentos","neto","netoLitro","totalIva","netoSinIva","costeReal","realLitro","kmTrip","l100km","costeRealKm"];
 
   if (!activeVehicleId) {
     return (
@@ -568,9 +437,7 @@ export default function Repostajes() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" onClick={addRow}>
-            <Plus className="h-4 w-4 mr-1" /> Añadir fila
-          </Button>
+          <Button size="sm" onClick={addRow}><Plus className="h-4 w-4 mr-1" /> Añadir fila</Button>
           {selectedCount > 0 && (
             <Button size="sm" variant="destructive" onClick={() => setDeleteOpen(true)}>
               <Trash2 className="h-4 w-4 mr-1" /> Eliminar ({selectedCount})
@@ -582,20 +449,17 @@ export default function Repostajes() {
         </div>
       </div>
 
-      {/* Grid */}
       <div className="border border-border rounded-lg shadow-sm overflow-auto bg-card">
         <table className="w-full border-collapse">
           <thead className="sticky top-0 z-10">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="bg-muted border-b-2 border-border">
                 {hg.headers.map((header) => (
-                  <th
-                    key={header.id}
+                  <th key={header.id}
                     className="text-left px-3 py-2 font-semibold text-xs text-muted-foreground
                                uppercase tracking-wide cursor-pointer select-none whitespace-nowrap
                                hover:text-foreground transition-colors"
-                    onClick={header.column.getToggleSortingHandler()}
-                  >
+                    onClick={header.column.getToggleSortingHandler()}>
                     <div className="flex items-center gap-1">
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       <span className="text-primary">
@@ -610,12 +474,9 @@ export default function Repostajes() {
               {table.getHeaderGroups()[0].headers.map((header) => (
                 <th key={`filter-${header.id}`} className="px-1 py-1">
                   {header.column.getCanFilter() ? (
-                    <Input
-                      className="h-6 text-xs px-1.5 bg-background"
-                      placeholder="Filtrar..."
+                    <Input className="h-6 text-xs px-1.5 bg-background" placeholder="Filtrar..."
                       value={(header.column.getFilterValue() as string) ?? ""}
-                      onChange={(e) => header.column.setFilterValue(e.target.value)}
-                    />
+                      onChange={(e) => header.column.setFilterValue(e.target.value)} />
                   ) : null}
                 </th>
               ))}
@@ -623,26 +484,20 @@ export default function Repostajes() {
           </thead>
           <tbody>
             {table.getRowModel().rows.map((row, i) => (
-              <tr
-                key={row.id}
+              <tr key={row.id}
                 className={[
                   "border-b border-border/60 transition-colors duration-150 group",
                   i % 2 === 0 ? "bg-card" : "bg-muted/40",
                   "hover:bg-primary/5",
                   row.getIsSelected() ? "!bg-primary/10 border-l-2 border-l-primary" : "",
                   flashRow === row.original.id ? "animate-save-flash" : "",
-                ].join(" ")}
-              >
+                ].join(" ")}>
                 {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
+                  <td key={cell.id}
                     className={[
                       "px-1 py-0 whitespace-nowrap text-sm tabular-nums",
-                      calculatedColIds.includes(cell.column.id)
-                        ? "text-muted-foreground px-3"
-                        : "",
-                    ].join(" ")}
-                  >
+                      calculatedColIds.includes(cell.column.id) ? "text-muted-foreground px-3" : "",
+                    ].join(" ")}>
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}
