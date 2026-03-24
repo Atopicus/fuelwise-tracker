@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import { Fuel, TrendingDown, Gauge, DollarSign, Route } from "lucide-react";
 import { fmtNum } from "@/lib/format";
-
+ 
 interface Repostaje {
   id: number;
   fecha: string;
@@ -23,14 +23,14 @@ interface Repostaje {
   iva_porcentaje: number;
   incluir_iva: boolean;
 }
-
+ 
 interface Descuento {
   id: number;
   nombre: string;
   porcentaje: number;
   orden_aplicacion: number;
 }
-
+ 
 function calcDescuentos(
   bruto: number, selectedIds: number[], descuentos: Descuento[]
 ): { netoPagado: number; netoParaIva: number; totalDescuento: number } {
@@ -48,7 +48,17 @@ function calcDescuentos(
   if (!selected.some((d) => d.orden_aplicacion === 0)) netoParaIva = base;
   return { netoPagado: base, netoParaIva, totalDescuento: bruto - base };
 }
-
+ 
+// ─── Igual que en Repostajes.tsx: respeta el flag incluir_iva por fila ────────
+function calcCosteReal(r: Repostaje, descuentos: Descuento[]): number {
+  const bruto = r.litros * r.coste_litro;
+  const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
+  const ivaRow = r.iva_porcentaje || 21;
+  const totalIva = netoParaIva - netoParaIva / (1 + ivaRow / 100);
+  const netoSinIva = netoPagado - totalIva;
+  return r.incluir_iva ? netoPagado : netoSinIva;
+}
+ 
 export default function Dashboard() {
   const { user } = useAuth();
   const { activeVehicleId } = useVehicleStore();
@@ -57,13 +67,13 @@ export default function Dashboard() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedYear, setSelectedYear] = useState("all");
-
+ 
   useEffect(() => {
     if (!user) return;
     supabase.from("descuentos").select("*").eq("user_id", user.id)
       .then(({ data }) => setDescuentos((data as any) || []));
   }, [user]);
-
+ 
   useEffect(() => {
     if (!user || !activeVehicleId) return;
     const fetchData = async () => {
@@ -83,33 +93,25 @@ export default function Dashboard() {
     };
     fetchData();
   }, [user, activeVehicleId, startDate, endDate]);
-
+ 
   const availableYears = useMemo(() => {
     return [...new Set(data.map((r) => r.fecha.slice(0, 4)))].sort();
   }, [data]);
-
+ 
   const filteredData = useMemo(() => {
     if (selectedYear === "all") return data;
     return data.filter((r) => r.fecha.startsWith(selectedYear));
   }, [data, selectedYear]);
-
-  const calcNetoSinIva = (r: Repostaje) => {
-    const bruto = r.litros * r.coste_litro;
-    const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
-    const ivaRow = r.iva_porcentaje || 21;
-    const totalIva = netoParaIva - netoParaIva / (1 + ivaRow / 100);
-    return netoPagado - totalIva;
-  };
-
+ 
   const stats = useMemo(() => {
     if (filteredData.length === 0) return null;
     let totalSpent = 0, totalLiters = 0, totalKm = 0, totalConsumption = 0, consumptionCount = 0;
-    let totalNetoSinIva = 0;
+    let totalCosteReal = 0;
     filteredData.forEach((r) => {
       const bruto = r.litros * r.coste_litro;
       totalSpent += bruto;
       totalLiters += r.litros;
-      totalNetoSinIva += calcNetoSinIva(r);
+      totalCosteReal += calcCosteReal(r, descuentos);
       const km = r.km_fin - r.km_inicio;
       totalKm += km;
       if (km > 0) { totalConsumption += (r.litros / km) * 100; consumptionCount++; }
@@ -121,27 +123,27 @@ export default function Dashboard() {
       totalKm,
       avgConsumption: consumptionCount > 0 ? fmtNum(totalConsumption / consumptionCount) : "—",
       avgCostPerKm: totalKm > 0 ? fmtNum(totalSpent / totalKm, 4) : "—",
-      totalNetoSinIva: fmtNum(totalNetoSinIva),
-      avgNetoSinIvaMes: uniqueMonths > 0 ? fmtNum(totalNetoSinIva / uniqueMonths) : "—",
+      totalCosteReal: fmtNum(totalCosteReal),
+      avgCosteRealMes: uniqueMonths > 0 ? fmtNum(totalCosteReal / uniqueMonths) : "—",
     };
   }, [filteredData, descuentos]);
-
+ 
   const chartData = useMemo(() => {
     const months: Record<string, number> = {};
     filteredData.forEach((r) => {
       const m = r.fecha.slice(0, 7);
       if (!months[m]) months[m] = 0;
-      months[m] += calcNetoSinIva(r);
+      months[m] += calcCosteReal(r, descuentos);
     });
-    return Object.entries(months).map(([month, netoSinIva]) => ({
-      month, netoSinIva: Number(netoSinIva.toFixed(2)),
+    return Object.entries(months).map(([month, costeReal]) => ({
+      month, costeReal: Number(costeReal.toFixed(2)),
     }));
   }, [filteredData, descuentos]);
-
+ 
   const priceChartData = useMemo(() => {
     return filteredData.map((r) => ({ fecha: r.fecha, precioLitro: r.coste_litro }));
   }, [filteredData]);
-
+ 
   const monthlyTable = useMemo(() => {
     const months: Record<string, Repostaje[]> = {};
     filteredData.forEach((r) => {
@@ -153,9 +155,9 @@ export default function Dashboard() {
       const totalLiters = rows.reduce((s, r) => s + r.litros, 0);
       const totalSpent = rows.reduce((s, r) => s + r.litros * r.coste_litro, 0);
       const totalKm = rows.reduce((s, r) => s + (r.km_fin - r.km_inicio), 0);
-      const totalNetoSinIva = rows.reduce((s, r) => s + calcNetoSinIva(r), 0);
+      const totalCosteReal = rows.reduce((s, r) => s + calcCosteReal(r, descuentos), 0);
       return {
-        month, totalLiters, totalSpent, totalNetoSinIva,
+        month, totalLiters, totalSpent, totalCosteReal,
         avgCostLiter: totalLiters > 0 ? totalSpent / totalLiters : 0,
         totalKm,
         avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0,
@@ -163,17 +165,17 @@ export default function Dashboard() {
       };
     });
   }, [filteredData, descuentos]);
-
+ 
   const totals = useMemo(() => {
     if (monthlyTable.length === 0) return null;
     const totalLiters = monthlyTable.reduce((s, r) => s + r.totalLiters, 0);
     const totalSpent = monthlyTable.reduce((s, r) => s + r.totalSpent, 0);
     const totalKm = monthlyTable.reduce((s, r) => s + r.totalKm, 0);
-    const totalNetoSinIva = monthlyTable.reduce((s, r) => s + r.totalNetoSinIva, 0);
-    return { totalLiters, totalSpent, totalKm, totalNetoSinIva,
+    const totalCosteReal = monthlyTable.reduce((s, r) => s + r.totalCosteReal, 0);
+    return { totalLiters, totalSpent, totalKm, totalCosteReal,
       avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0 };
   }, [monthlyTable]);
-
+ 
   if (!activeVehicleId) {
     return (
       <div className="flex flex-col items-center justify-center h-96 text-muted-foreground">
@@ -183,7 +185,7 @@ export default function Dashboard() {
       </div>
     );
   }
-
+ 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
@@ -209,13 +211,13 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-
+ 
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           {[
             { title: "Total Bruto", value: `${stats.totalSpent} €`, icon: DollarSign },
-            { title: "Total Neto s/IVA", value: `${stats.totalNetoSinIva} €`, icon: DollarSign },
-            { title: "Media Neto s/IVA/mes", value: `${stats.avgNetoSinIvaMes} €`, icon: TrendingDown },
+            { title: "Coste Real", value: `${stats.totalCosteReal} €`, icon: DollarSign },
+            { title: "Media Coste Real/mes", value: `${stats.avgCosteRealMes} €`, icon: TrendingDown },
             { title: "Total Litros", value: `${stats.totalLiters} L`, icon: Fuel },
             { title: "Total Km", value: `${stats.totalKm} km`, icon: Route },
             { title: "Consumo Medio", value: `${stats.avgConsumption} L/100km`, icon: Gauge },
@@ -233,10 +235,10 @@ export default function Dashboard() {
           ))}
         </div>
       )}
-
+ 
       <div className="grid lg:grid-cols-2 gap-6">
         <Card className="border-border shadow-sm">
-          <CardHeader><CardTitle className="text-base font-semibold">Neto sin IVA por mes (€)</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base font-semibold">Coste Real por mes (€)</CardTitle></CardHeader>
           <CardContent>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -245,14 +247,14 @@ export default function Dashboard() {
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
                   <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
                   <Tooltip contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
-                    formatter={(value: number) => [`${fmtNum(value)} €`, "Neto s/IVA"]} />
-                  <Bar dataKey="netoSinIva" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                    formatter={(value: number) => [`${fmtNum(value)} €`, "Coste Real"]} />
+                  <Bar dataKey="costeReal" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
-
+ 
         <Card className="border-border shadow-sm">
           <CardHeader><CardTitle className="text-base font-semibold">Evolución precio/litro (€/L)</CardTitle></CardHeader>
           <CardContent>
@@ -272,7 +274,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
-
+ 
       <Card className="border-border shadow-sm overflow-auto">
         <CardHeader><CardTitle className="text-base font-semibold">Resumen mensual</CardTitle></CardHeader>
         <CardContent className="p-0">
@@ -282,7 +284,7 @@ export default function Dashboard() {
                 <th className="text-left p-2 font-medium">Mes</th>
                 <th className="text-right p-2 font-medium">Litros</th>
                 <th className="text-right p-2 font-medium">Gastado</th>
-                <th className="text-right p-2 font-medium">Neto s/IVA</th>
+                <th className="text-right p-2 font-medium">Coste Real</th>
                 <th className="text-right p-2 font-medium">Km</th>
                 <th className="text-right p-2 font-medium">L/100km</th>
               </tr>
@@ -293,7 +295,7 @@ export default function Dashboard() {
                   <td className="p-2">{row.month}</td>
                   <td className="p-2 text-right tabular-nums">{fmtNum(row.totalLiters, 1)}</td>
                   <td className="p-2 text-right tabular-nums">{fmtNum(row.totalSpent)} €</td>
-                  <td className="p-2 text-right tabular-nums">{fmtNum(row.totalNetoSinIva)} €</td>
+                  <td className="p-2 text-right tabular-nums">{fmtNum(row.totalCosteReal)} €</td>
                   <td className="p-2 text-right tabular-nums">{row.totalKm}</td>
                   <td className="p-2 text-right tabular-nums">{row.avgConsumption > 0 ? fmtNum(row.avgConsumption) : "—"}</td>
                 </tr>
@@ -303,7 +305,7 @@ export default function Dashboard() {
                   <td className="p-2">Total</td>
                   <td className="p-2 text-right tabular-nums">{fmtNum(totals.totalLiters, 1)}</td>
                   <td className="p-2 text-right tabular-nums">{fmtNum(totals.totalSpent)} €</td>
-                  <td className="p-2 text-right tabular-nums">{fmtNum(totals.totalNetoSinIva)} €</td>
+                  <td className="p-2 text-right tabular-nums">{fmtNum(totals.totalCosteReal)} €</td>
                   <td className="p-2 text-right tabular-nums">{totals.totalKm}</td>
                   <td className="p-2 text-right tabular-nums">{totals.avgConsumption > 0 ? fmtNum(totals.avgConsumption) : "—"}</td>
                 </tr>
