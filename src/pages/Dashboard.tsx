@@ -216,7 +216,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           {[
             { title: "Total Bruto", value: `${stats.totalSpent} €`, icon: DollarSign },
-            { title: "Coste Real", value: `${stats.totalCosteReal} €`, icon: DollarSign },
+            { title: "Cost Real", value: `${stats.totalCosteReal} €`, icon: DollarSign },
             { title: "Media Coste Real/mes", value: `${stats.avgCosteRealMes} €`, icon: TrendingDown },
             { title: "Total Litros", value: `${stats.totalLiters} L`, icon: Fuel },
             { title: "Total Km", value: `${stats.totalKm} km`, icon: Route },
