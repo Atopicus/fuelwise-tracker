@@ -7,11 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  ComposedChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, ReferenceLine, Legend,
 } from "recharts";
 import { Fuel, TrendingDown, Gauge, DollarSign, Route } from "lucide-react";
 import { fmtNum } from "@/lib/format";
- 
+
 interface Repostaje {
   id: number;
   fecha: string;
@@ -23,14 +24,14 @@ interface Repostaje {
   iva_porcentaje: number;
   incluir_iva: boolean;
 }
- 
+
 interface Descuento {
   id: number;
   nombre: string;
   porcentaje: number;
   orden_aplicacion: number;
 }
- 
+
 function calcDescuentos(
   bruto: number, selectedIds: number[], descuentos: Descuento[]
 ): { netoPagado: number; netoParaIva: number; totalDescuento: number } {
@@ -48,8 +49,7 @@ function calcDescuentos(
   if (!selected.some((d) => d.orden_aplicacion === 0)) netoParaIva = base;
   return { netoPagado: base, netoParaIva, totalDescuento: bruto - base };
 }
- 
-// ─── Igual que en Repostajes.tsx: respeta el flag incluir_iva por fila ────────
+
 function calcCosteReal(r: Repostaje, descuentos: Descuento[]): number {
   const bruto = r.litros * r.coste_litro;
   const { netoPagado, netoParaIva } = calcDescuentos(bruto, r.descuento_ids, descuentos);
@@ -58,7 +58,7 @@ function calcCosteReal(r: Repostaje, descuentos: Descuento[]): number {
   const netoSinIva = netoPagado - totalIva;
   return r.incluir_iva ? netoPagado : netoSinIva;
 }
- 
+
 export default function Dashboard() {
   const { user } = useAuth();
   const { activeVehicleId } = useVehicleStore();
@@ -67,13 +67,13 @@ export default function Dashboard() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedYear, setSelectedYear] = useState("all");
- 
+
   useEffect(() => {
     if (!user) return;
     supabase.from("descuentos").select("*").eq("user_id", user.id)
       .then(({ data }) => setDescuentos((data as any) || []));
   }, [user]);
- 
+
   useEffect(() => {
     if (!user || !activeVehicleId) return;
     const fetchData = async () => {
@@ -93,16 +93,16 @@ export default function Dashboard() {
     };
     fetchData();
   }, [user, activeVehicleId, startDate, endDate]);
- 
+
   const availableYears = useMemo(() => {
     return [...new Set(data.map((r) => r.fecha.slice(0, 4)))].sort();
   }, [data]);
- 
+
   const filteredData = useMemo(() => {
     if (selectedYear === "all") return data;
     return data.filter((r) => r.fecha.startsWith(selectedYear));
   }, [data, selectedYear]);
- 
+
   const stats = useMemo(() => {
     if (filteredData.length === 0) return null;
     let totalSpent = 0, totalLiters = 0, totalKm = 0, totalConsumption = 0, consumptionCount = 0;
@@ -127,23 +127,35 @@ export default function Dashboard() {
       avgCosteRealMes: uniqueMonths > 0 ? fmtNum(totalCosteReal / uniqueMonths) : "—",
     };
   }, [filteredData, descuentos]);
- 
-  const chartData = useMemo(() => {
+
+  // Coste real por mes + media mensual para ReferenceLine
+  const { chartData, avgCosteRealMes } = useMemo(() => {
     const months: Record<string, number> = {};
     filteredData.forEach((r) => {
       const m = r.fecha.slice(0, 7);
       if (!months[m]) months[m] = 0;
       months[m] += calcCosteReal(r, descuentos);
     });
-    return Object.entries(months).map(([month, costeReal]) => ({
+    const entries = Object.entries(months).map(([month, costeReal]) => ({
       month, costeReal: Number(costeReal.toFixed(2)),
     }));
+    const avg = entries.length > 0
+      ? Number((entries.reduce((s, e) => s + e.costeReal, 0) / entries.length).toFixed(2))
+      : 0;
+    return { chartData: entries, avgCosteRealMes: avg };
   }, [filteredData, descuentos]);
- 
+
+  // Precio bruto/litro vs coste real/litro por repostaje
   const priceChartData = useMemo(() => {
-    return filteredData.map((r) => ({ fecha: r.fecha, precioLitro: r.coste_litro }));
-  }, [filteredData]);
- 
+    return filteredData.map((r) => ({
+      fecha: r.fecha,
+      precioLitro: r.coste_litro,
+      costeRealLitro: r.litros > 0
+        ? Number((calcCosteReal(r, descuentos) / r.litros).toFixed(4))
+        : null,
+    }));
+  }, [filteredData, descuentos]);
+
   const monthlyTable = useMemo(() => {
     const months: Record<string, Repostaje[]> = {};
     filteredData.forEach((r) => {
@@ -158,24 +170,24 @@ export default function Dashboard() {
       const totalCosteReal = rows.reduce((s, r) => s + calcCosteReal(r, descuentos), 0);
       return {
         month, totalLiters, totalSpent, totalCosteReal,
-        avgCostLiter: totalLiters > 0 ? totalSpent / totalLiters : 0,
         totalKm,
         avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0,
-        avgCostKm: totalKm > 0 ? totalSpent / totalKm : 0,
       };
     });
   }, [filteredData, descuentos]);
- 
+
   const totals = useMemo(() => {
     if (monthlyTable.length === 0) return null;
     const totalLiters = monthlyTable.reduce((s, r) => s + r.totalLiters, 0);
     const totalSpent = monthlyTable.reduce((s, r) => s + r.totalSpent, 0);
     const totalKm = monthlyTable.reduce((s, r) => s + r.totalKm, 0);
     const totalCosteReal = monthlyTable.reduce((s, r) => s + r.totalCosteReal, 0);
-    return { totalLiters, totalSpent, totalKm, totalCosteReal,
-      avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0 };
+    return {
+      totalLiters, totalSpent, totalKm, totalCosteReal,
+      avgConsumption: totalKm > 0 ? (totalLiters / totalKm) * 100 : 0,
+    };
   }, [monthlyTable]);
- 
+
   if (!activeVehicleId) {
     return (
       <div className="flex flex-col items-center justify-center h-96 text-muted-foreground">
@@ -185,7 +197,7 @@ export default function Dashboard() {
       </div>
     );
   }
- 
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
@@ -211,12 +223,12 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
- 
+
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           {[
             { title: "Total Bruto", value: `${stats.totalSpent} €`, icon: DollarSign },
-            { title: "Cost Real", value: `${stats.totalCosteReal} €`, icon: DollarSign },
+            { title: "Coste Real", value: `${stats.totalCosteReal} €`, icon: DollarSign },
             { title: "Media Coste Real/mes", value: `${stats.avgCosteRealMes} €`, icon: TrendingDown },
             { title: "Total Litros", value: `${stats.totalLiters} L`, icon: Fuel },
             { title: "Total Km", value: `${stats.totalKm} km`, icon: Route },
@@ -235,26 +247,45 @@ export default function Dashboard() {
           ))}
         </div>
       )}
- 
+
       <div className="grid lg:grid-cols-2 gap-6">
+
+        {/* Coste Real por mes con línea de media */}
         <Card className="border-border shadow-sm">
           <CardHeader><CardTitle className="text-base font-semibold">Coste Real por mes (€)</CardTitle></CardHeader>
           <CardContent>
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
+                <ComposedChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
                   <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
-                    formatter={(value: number) => [`${fmtNum(value)} €`, "Coste Real"]} />
-                  <Bar dataKey="costeReal" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
-                </BarChart>
+                  <Tooltip
+                    contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
+                    formatter={(value: number) => [`${fmtNum(value)} €`, "Coste Real"]}
+                  />
+                  <Bar dataKey="costeReal" name="Coste Real" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                  {avgCosteRealMes > 0 && (
+                    <ReferenceLine
+                      y={avgCosteRealMes}
+                      stroke="hsl(var(--destructive))"
+                      strokeDasharray="5 3"
+                      strokeWidth={2}
+                      label={{
+                        value: `Media: ${fmtNum(avgCosteRealMes)} €`,
+                        position: "insideTopRight",
+                        fontSize: 11,
+                        fill: "hsl(var(--destructive))",
+                      }}
+                    />
+                  )}
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
- 
+
+        {/* Precio bruto/L vs Coste real/L */}
         <Card className="border-border shadow-sm">
           <CardHeader><CardTitle className="text-base font-semibold">Evolución precio/litro (€/L)</CardTitle></CardHeader>
           <CardContent>
@@ -264,17 +295,42 @@ export default function Dashboard() {
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="fecha" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                   <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" domain={["auto", "auto"]} />
-                  <Tooltip contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
-                    formatter={(value: number) => [`${fmtNum(value, 3)} €/L`, "Precio"]} />
-                  <Line type="monotone" dataKey="precioLitro" stroke="hsl(var(--primary))" strokeWidth={2}
-                    dot={{ r: 3, fill: "hsl(var(--primary))" }} activeDot={{ r: 5 }} />
+                  <Tooltip
+                    contentStyle={{ borderRadius: 6, border: "1px solid hsl(var(--border))" }}
+                    formatter={(value: number, name: string) => [
+                      `${fmtNum(value, 4)} €/L`,
+                      name === "precioLitro" ? "Precio bruto/L" : "Coste real/L",
+                    ]}
+                  />
+                  <Legend
+                    formatter={(value) => value === "precioLitro" ? "Precio bruto/L" : "Coste real/L"}
+                    wrapperStyle={{ fontSize: 12 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="precioLitro"
+                    stroke="hsl(var(--primary))"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: "hsl(var(--primary))" }}
+                    activeDot={{ r: 5 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="costeRealLitro"
+                    stroke="hsl(var(--destructive))"
+                    strokeWidth={2}
+                    strokeDasharray="4 2"
+                    dot={{ r: 3, fill: "hsl(var(--destructive))" }}
+                    activeDot={{ r: 5 }}
+                    connectNulls
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
       </div>
- 
+
       <Card className="border-border shadow-sm overflow-auto">
         <CardHeader><CardTitle className="text-base font-semibold">Resumen mensual</CardTitle></CardHeader>
         <CardContent className="p-0">
