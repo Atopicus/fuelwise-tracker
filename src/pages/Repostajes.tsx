@@ -511,6 +511,66 @@ export default function Repostajes() {
               </tr>
             )}
           </tbody>
+            {(() => {
+              const filteredRows = table.getFilteredRowModel().rows;
+              if (filteredRows.length === 0) return null;
+
+              let totalLitros = 0, totalBruto = 0, totalDescuento = 0, totalNeto = 0;
+              let totalIvaSum = 0, totalNetoSinIva = 0, totalCosteReal = 0, totalKm = 0;
+
+              filteredRows.forEach((row) => {
+                const r = row.original;
+                const c = calcCosteReal(r, descuentos);
+                totalLitros += r.litros;
+                totalBruto += c.bruto;
+                totalDescuento += c.totalDescuento;
+                totalNeto += c.netoPagado;
+                totalIvaSum += c.totalIva;
+                totalNetoSinIva += c.netoSinIva;
+                totalCosteReal += c.costeReal;
+                totalKm += c.km;
+              });
+
+              const colTotals: Record<string, string> = {
+                fecha: `${filteredRows.length} reg.`,
+                litros: fmtNum(totalLitros),
+                coste_litro: totalLitros > 0 ? fmtNum(totalBruto / totalLitros, 4) : "—",
+                bruto: fmtNum(totalBruto),
+                totalDescuentos: fmtNum(totalDescuento),
+                neto: fmtNum(totalNeto),
+                netoLitro: totalLitros > 0 ? fmtNum(totalNeto / totalLitros, 4) : "—",
+                totalIva: fmtNum(totalIvaSum),
+                netoSinIva: fmtNum(totalNetoSinIva),
+                costeReal: fmtNum(totalCosteReal),
+                realLitro: totalLitros > 0 ? fmtNum(totalCosteReal / totalLitros, 4) : "—",
+                kmTrip: String(totalKm),
+                l100km: totalKm > 0 ? fmtNum((totalLitros / totalKm) * 100) : "—",
+                costeRealKm: totalKm > 0 ? fmtNum(totalCosteReal / totalKm, 4) : "—",
+              };
+
+              return (
+                <tfoot>
+                  <tr className="border-t-2 border-primary/40 bg-muted/80 sticky bottom-0">
+                    {table.getHeaderGroups()[0].headers.map((header) => {
+                      const id = header.column.id;
+                      const val = colTotals[id];
+                      return (
+                        <td
+                          key={id}
+                          className={[
+                            "px-3 py-2 text-sm tabular-nums whitespace-nowrap font-semibold",
+                            calculatedColIds.includes(id) ? "text-muted-foreground" : "",
+                            id === "fecha" ? "text-xs uppercase tracking-wide text-primary" : "",
+                          ].join(" ")}
+                        >
+                          {val ?? ""}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tfoot>
+              );
+            })()}
         </table>
       </div>
 
